@@ -1,0 +1,24 @@
+# Source files (we publish dist only)
+src/
+
+# Config files
+tsconfig.json
+.gitignore
+.env*
+
+# IDE
+.idea/
+.vscode/
+
+# Test files
+*.test.ts
+*.spec.ts
+__tests__/
+coverage/
+
+# Development files
+.claude/
+
+# OS files
+.DS_Store
+Thumbs.db
