@@ -12,21 +12,13 @@ export interface BootstrapOptions {
 
 export interface AuthData {
   orgSlug: string;
+  cicdAccountId: string;
+  cicdRegion: string;
 }
 
-export interface DeploymentPlan {
-  orgSlug: string;
-  stacks: StackDeployment[];
-}
-
-export interface StackDeployment {
-  accountId: string;
-  pipelineSlug: string;
-  stackName: string;
-  action: 'CREATE' | 'UPDATE';
-  steps: string[];
-  additionalPoliciesCount: number;
-}
+// DeploymentPlan and StackDeployment types have moved to ./stacks.ts
+// Re-export for backward compatibility during migration
+export type { DeploymentPlan, StackDeployment } from './stacks.js';
 
 export const DEFAULT_TARGET_ROLE = 'OrganizationAccountAccessRole';
 export const FALLBACK_TARGET_ROLE = 'AWSControlTowerExecution';

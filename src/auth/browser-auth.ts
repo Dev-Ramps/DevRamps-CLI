@@ -10,6 +10,7 @@ import open from 'open';
 import { createServer, type Server } from 'node:http';
 import { AuthenticationError } from '../utils/errors.js';
 import * as logger from '../utils/logger.js';
+import { isValidAwsAccountId, isValidAwsRegion } from '../utils/validation.js';
 import type { AuthData } from '../types/config.js';
 
 const DEFAULT_AUTH_BASE_URL = 'https://devramps.com';
@@ -19,6 +20,8 @@ const AUTH_TIMEOUT_MS = 300000; // 5 minutes
 
 interface CallbackData {
   orgSlug?: string;
+  cicdAccountId?: string;
+  cicdRegion?: string;
   error?: string;
 }
 
@@ -78,10 +81,21 @@ export async function authenticateViaBrowser(options: AuthOptions = {}): Promise
       throw new AuthenticationError('No organization selected. Please try again.');
     }
 
+    if (!data.cicdAccountId) {
+      throw new AuthenticationError('No CI/CD account ID received. Please try again.');
+    }
+
+    if (!data.cicdRegion) {
+      throw new AuthenticationError('No CI/CD region received. Please try again.');
+    }
+
     logger.success(`Authenticated with organization: ${data.orgSlug}`);
+    logger.verbose(`CI/CD Account: ${data.cicdAccountId}, Region: ${data.cicdRegion}`);
 
     return {
       orgSlug: data.orgSlug,
+      cicdAccountId: data.cicdAccountId,
+      cicdRegion: data.cicdRegion,
     };
   } finally {
     // Always close the server
@@ -106,7 +120,7 @@ async function startCallbackServer(): Promise<{
 
   // Callback endpoint
   app.get(CALLBACK_PATH, (req, res) => {
-    const { org_slug, error } = req.query;
+    const { org_slug, cicd_account_id, cicd_region, error } = req.query;
 
     if (error) {
       res.send(errorPage(String(error)));
@@ -120,8 +134,38 @@ async function startCallbackServer(): Promise<{
       return;
     }
 
+    if (!cicd_account_id || typeof cicd_account_id !== 'string') {
+      res.send(errorPage('No CI/CD account ID received'));
+      resolveData({ error: 'No CI/CD account ID received' });
+      return;
+    }
+
+    // Validate cicd_account_id format (must be exactly 12 digits)
+    if (!isValidAwsAccountId(cicd_account_id)) {
+      res.send(errorPage('Invalid CI/CD account ID format'));
+      resolveData({ error: 'Invalid CI/CD account ID format. Expected 12 digits.' });
+      return;
+    }
+
+    if (!cicd_region || typeof cicd_region !== 'string') {
+      res.send(errorPage('No CI/CD region received'));
+      resolveData({ error: 'No CI/CD region received' });
+      return;
+    }
+
+    // Validate cicd_region format (must be a valid AWS region)
+    if (!isValidAwsRegion(cicd_region)) {
+      res.send(errorPage('Invalid CI/CD region format'));
+      resolveData({ error: `Invalid CI/CD region: "${cicd_region}". Expected a valid AWS region.` });
+      return;
+    }
+
     res.send(successPage(org_slug));
-    resolveData({ orgSlug: org_slug });
+    resolveData({
+      orgSlug: org_slug,
+      cicdAccountId: cicd_account_id,
+      cicdRegion: cicd_region,
+    });
   });
 
   // Start server on a random available port

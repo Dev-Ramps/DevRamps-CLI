@@ -5,6 +5,7 @@
 import {
   CloudFormationClient,
   DescribeStacksCommand,
+  DescribeStackResourcesCommand,
   CreateStackCommand,
   UpdateStackCommand,
   waitUntilStackCreateComplete,
@@ -15,6 +16,7 @@ import type { AwsCredentialIdentity } from '@aws-sdk/types';
 import { CloudFormationError } from '../utils/errors.js';
 import * as logger from '../utils/logger.js';
 import type { StackStatus, CloudFormationTemplate } from '../types/aws.js';
+import type { CloudFormationStackResources } from '../merge/strategy.js';
 
 export interface DeployStackOptions {
   stackName: string;
@@ -144,4 +146,77 @@ async function updateStack(
   );
 
   logger.success(`Stack ${stackName} updated successfully in account ${accountId}`);
+}
+
+/**
+ * Read existing stack resources and outputs for merge operations
+ */
+export async function readExistingStack(
+  stackName: string,
+  accountId: string,
+  region: string,
+  credentials?: AwsCredentialIdentity
+): Promise<CloudFormationStackResources | null> {
+  const client = new CloudFormationClient({
+    credentials,
+    region,
+  });
+
+  try {
+    // Get stack details including outputs
+    const stacksResponse = await client.send(
+      new DescribeStacksCommand({ StackName: stackName })
+    );
+
+    const stack = stacksResponse.Stacks?.[0];
+    if (!stack) {
+      return null;
+    }
+
+    // Get stack resources
+    const resourcesResponse = await client.send(
+      new DescribeStackResourcesCommand({ StackName: stackName })
+    );
+
+    // Convert outputs to a simple key-value map
+    const outputs: Record<string, string> = {};
+    if (stack.Outputs) {
+      for (const output of stack.Outputs) {
+        if (output.OutputKey && output.OutputValue) {
+          outputs[output.OutputKey] = output.OutputValue;
+        }
+      }
+    }
+
+    // Convert resources to a simple map
+    const resources: Record<string, unknown> = {};
+    if (resourcesResponse.StackResources) {
+      for (const resource of resourcesResponse.StackResources) {
+        if (resource.LogicalResourceId) {
+          resources[resource.LogicalResourceId] = {
+            type: resource.ResourceType,
+            physicalId: resource.PhysicalResourceId,
+            status: resource.ResourceStatus,
+          };
+        }
+      }
+    }
+
+    return {
+      stackName,
+      accountId,
+      region,
+      resources,
+      outputs,
+    };
+  } catch (error) {
+    const errorMessage = error instanceof Error ? error.message : String(error);
+
+    if (errorMessage.includes('does not exist')) {
+      return null;
+    }
+
+    logger.verbose(`Could not read stack ${stackName}: ${errorMessage}`);
+    return null;
+  }
 }
