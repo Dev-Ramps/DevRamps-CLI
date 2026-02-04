@@ -16,6 +16,7 @@ import type { AwsCredentialIdentity } from '@aws-sdk/types';
 import type { CloudFormationStackResources, MergeContext, ValidationResult } from './strategy.js';
 import { BaseMergeStrategy } from './strategy.js';
 import * as logger from '../utils/logger.js';
+import { isValidAwsAccountId } from '../utils/validation.js';
 
 /**
  * Data structure for bucket policy merge
@@ -106,12 +107,22 @@ export class BucketPolicyMergeStrategy extends BaseMergeStrategy<
   async collectNew(context: MergeContext): Promise<BucketPolicyData> {
     const accountIds = new Set<string>();
 
-    // Always include the CI/CD account
+    // Validate and add the CI/CD account
+    if (!isValidAwsAccountId(context.cicdAccountId)) {
+      throw new Error(
+        `Invalid CI/CD account ID: "${context.cicdAccountId}". AWS account IDs must be exactly 12 digits.`
+      );
+    }
     accountIds.add(context.cicdAccountId);
 
-    // Collect from all pipelines
+    // Collect from all pipelines, validating each account ID
     for (const pipeline of context.pipelines) {
       for (const accountId of pipeline.targetAccountIds) {
+        if (!isValidAwsAccountId(accountId)) {
+          throw new Error(
+            `Invalid target account ID in pipeline "${pipeline.slug}": "${accountId}". AWS account IDs must be exactly 12 digits.`
+          );
+        }
         accountIds.add(accountId);
       }
     }
@@ -206,19 +217,27 @@ export class BucketPolicyMergeStrategy extends BaseMergeStrategy<
       const principals = Array.isArray(principal) ? principal : [principal];
 
       for (const p of principals) {
+        let extractedId: string | null = null;
+
         // Match patterns like:
         // - arn:aws:iam::123456789012:root
         // - arn:aws:iam::123456789012:role/RoleName
         // - 123456789012 (just account ID)
         const arnMatch = p.match(/arn:aws:iam::(\d{12}):/);
         if (arnMatch) {
-          accountIds.push(arnMatch[1]);
-          continue;
+          extractedId = arnMatch[1];
+        } else if (/^\d{12}$/.test(p)) {
+          // Direct account ID
+          extractedId = p;
         }
 
-        // Direct account ID
-        if (/^\d{12}$/.test(p)) {
-          accountIds.push(p);
+        // Validate extracted account ID before adding
+        if (extractedId) {
+          if (isValidAwsAccountId(extractedId)) {
+            accountIds.push(extractedId);
+          } else {
+            logger.verbose(`Skipping invalid account ID from existing policy: "${extractedId}"`);
+          }
         }
       }
     }

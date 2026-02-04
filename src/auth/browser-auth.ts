@@ -10,6 +10,7 @@ import open from 'open';
 import { createServer, type Server } from 'node:http';
 import { AuthenticationError } from '../utils/errors.js';
 import * as logger from '../utils/logger.js';
+import { isValidAwsAccountId, isValidAwsRegion } from '../utils/validation.js';
 import type { AuthData } from '../types/config.js';
 
 const DEFAULT_AUTH_BASE_URL = 'https://devramps.com';
@@ -139,9 +140,23 @@ async function startCallbackServer(): Promise<{
       return;
     }
 
+    // Validate cicd_account_id format (must be exactly 12 digits)
+    if (!isValidAwsAccountId(cicd_account_id)) {
+      res.send(errorPage('Invalid CI/CD account ID format'));
+      resolveData({ error: 'Invalid CI/CD account ID format. Expected 12 digits.' });
+      return;
+    }
+
     if (!cicd_region || typeof cicd_region !== 'string') {
       res.send(errorPage('No CI/CD region received'));
       resolveData({ error: 'No CI/CD region received' });
+      return;
+    }
+
+    // Validate cicd_region format (must be a valid AWS region)
+    if (!isValidAwsRegion(cicd_region)) {
+      res.send(errorPage('Invalid CI/CD region format'));
+      resolveData({ error: `Invalid CI/CD region: "${cicd_region}". Expected a valid AWS region.` });
       return;
     }
 
