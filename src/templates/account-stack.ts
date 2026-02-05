@@ -9,7 +9,7 @@
  */
 
 import type { CloudFormationTemplate } from '../types/aws.js';
-import { createBaseTemplate, addOidcProviderResource, STANDARD_TAGS } from './common.js';
+import { createBaseTemplate, addOidcProviderResource } from './common.js';
 import { getAccountStackName } from '../naming/index.js';
 
 /**

@@ -31,6 +31,8 @@ export interface DeployStackOptions {
   accountId: string;
   region?: string;
   credentials?: AwsCredentialIdentity;
+  /** Set to false to disable progress bar (recommended for parallel deployments) */
+  showProgress?: boolean;
 }
 
 export async function getStackStatus(
@@ -262,15 +264,16 @@ async function waitForStackWithProgress(
   stackName: string,
   operationStartTime: Date,
   totalResources: number,
-  maxWaitTime: number = 600
+  maxWaitTime: number = 600,
+  showProgress: boolean = true
 ): Promise<void> {
   const seenEventIds = new Set<string>();
   const completedResources = new Set<string>();
   const startTime = Date.now();
   const pollInterval = 3000; // Poll every 3 seconds
 
-  // Create progress bar
-  const progressBar = new ProgressBar(stackName, totalResources);
+  // Create progress bar only if showProgress is enabled
+  const progressBar = showProgress ? new ProgressBar(stackName, totalResources) : null;
 
   try {
     while (true) {
@@ -315,14 +318,18 @@ async function waitForStackWithProgress(
           completedResources.add(logicalId);
         }
 
-        // Update progress bar with event
-        progressBar.update(completedResources.size, formatStackEvent(event));
+        // Update progress bar with event (or log if no progress bar)
+        if (progressBar) {
+          progressBar.update(completedResources.size, formatStackEvent(event));
+        }
       }
 
       // Check if we've reached a terminal state
       const currentStatus = stack.StackStatus || '';
       if (TERMINAL_STATES.has(currentStatus)) {
-        progressBar.finish();
+        if (progressBar) {
+          progressBar.finish();
+        }
         if (SUCCESS_STATES.has(currentStatus)) {
           return; // Success!
         }
@@ -334,13 +341,15 @@ async function waitForStackWithProgress(
       await new Promise(resolve => setTimeout(resolve, pollInterval));
     }
   } catch (error) {
-    progressBar.finish();
+    if (progressBar) {
+      progressBar.finish();
+    }
     throw error;
   }
 }
 
 export async function deployStack(options: DeployStackOptions): Promise<void> {
-  const { stackName, template, accountId, region, credentials } = options;
+  const { stackName, template, accountId, region, credentials, showProgress = true } = options;
 
   const client = new CloudFormationClient({
     credentials,
@@ -355,10 +364,10 @@ export async function deployStack(options: DeployStackOptions): Promise<void> {
 
     if (stackStatus.exists) {
       logger.verbose(`Stack ${stackName} exists, updating...`);
-      await updateStack(client, stackName, templateBody, accountId, resourceCount);
+      await updateStack(client, stackName, templateBody, accountId, resourceCount, showProgress);
     } else {
       logger.verbose(`Stack ${stackName} does not exist, creating...`);
-      await createStack(client, stackName, templateBody, accountId, resourceCount);
+      await createStack(client, stackName, templateBody, accountId, resourceCount, showProgress);
     }
   } catch (error) {
     const errorMessage = error instanceof Error ? error.message : String(error);
@@ -378,7 +387,8 @@ async function createStack(
   stackName: string,
   templateBody: string,
   accountId: string,
-  resourceCount: number
+  resourceCount: number,
+  showProgress: boolean = true
 ): Promise<void> {
   const operationStartTime = new Date();
 
@@ -396,7 +406,7 @@ async function createStack(
 
   logger.info(`Creating stack ${stackName}...`);
 
-  await waitForStackWithProgress(client, stackName, operationStartTime, resourceCount, 600);
+  await waitForStackWithProgress(client, stackName, operationStartTime, resourceCount, 600, showProgress);
 
   logger.success(`Stack ${stackName} created successfully in account ${accountId}`);
 }
@@ -406,7 +416,8 @@ async function updateStack(
   stackName: string,
   templateBody: string,
   accountId: string,
-  resourceCount: number
+  resourceCount: number,
+  showProgress: boolean = true
 ): Promise<void> {
   const operationStartTime = new Date();
 
@@ -420,7 +431,7 @@ async function updateStack(
 
   logger.info(`Updating stack ${stackName}...`);
 
-  await waitForStackWithProgress(client, stackName, operationStartTime, resourceCount, 600);
+  await waitForStackWithProgress(client, stackName, operationStartTime, resourceCount, 600, showProgress);
 
   logger.success(`Stack ${stackName} updated successfully in account ${accountId}`);
 }

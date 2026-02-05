@@ -27,13 +27,13 @@ import { setVerbose } from '../utils/logger.js';
 import { confirmDeployment, confirmDryRun } from '../utils/prompts.js';
 import type { BootstrapOptions, AuthData } from '../types/config.js';
 import type { ParsedPipeline } from '../types/pipeline.js';
-import type {
-  DeploymentPlan,
-  OrgStackDeployment,
-  PipelineStackDeployment,
-  AccountStackDeployment,
-  StageStackDeployment,
+import {
   StackType,
+  type DeploymentPlan,
+  type OrgStackDeployment,
+  type PipelineStackDeployment,
+  type AccountStackDeployment,
+  type StageStackDeployment,
 } from '../types/stacks.js';
 import type { ParsedArtifacts } from '../types/artifacts.js';
 
@@ -165,7 +165,7 @@ async function buildDeploymentPlan(
   // 1. Org Stack
   const orgStackName = getOrgStackName(orgSlug);
   const orgStack: OrgStackDeployment = {
-    stackType: 'Org' as StackType.ORG,
+    stackType: StackType.ORG,
     stackName: orgStackName,
     accountId: cicdAccountId,
     region: cicdRegion,
@@ -182,7 +182,7 @@ async function buildDeploymentPlan(
     const stackName = getPipelineStackName(pipeline.slug);
 
     pipelineStacks.push({
-      stackType: 'Pipeline' as StackType.PIPELINE,
+      stackType: StackType.PIPELINE,
       stackName,
       accountId: cicdAccountId,
       region: cicdRegion,
@@ -224,7 +224,7 @@ async function buildDeploymentPlan(
       }
 
       accountStacks.push({
-        stackType: 'Account' as StackType.ACCOUNT,
+        stackType: StackType.ACCOUNT,
         stackName: accountStackName,
         accountId: stage.account_id,
         region: cicdRegion, // Deploy in CI/CD region for consistency
@@ -257,7 +257,7 @@ async function buildDeploymentPlan(
       }
 
       stageStacks.push({
-        stackType: 'Stage' as StackType.STAGE,
+        stackType: StackType.STAGE,
         stackName,
         accountId: stage.account_id,
         region: stage.region,
@@ -432,26 +432,27 @@ async function executeDeployment(
     }
   });
 
-  // Wait for pipeline and account stacks to complete
-  const phase2Results = await Promise.all([...pipelinePromises, ...accountPromises]);
+  // Wait for pipeline and account stacks to complete (separately for precise failure tracking)
+  const pipelineResults = await Promise.all(pipelinePromises);
+  const accountResults = await Promise.all(accountPromises);
 
   // Process phase 2 results
   logger.newline();
-  let phase2Failed = false;
-  for (const result of phase2Results) {
+  let accountStacksFailed = false;
+  for (const result of [...pipelineResults, ...accountResults]) {
     if (result.success) {
       logger.success(`${result.stack} deployed`);
       results.success++;
     } else {
       logger.error(`${result.stack} failed: ${result.error}`);
       results.failed++;
-      phase2Failed = true;
     }
   }
 
-  // Check if any account stacks failed - if so, we can't deploy stage stacks
-  if (phase2Failed) {
-    logger.warn('Some Phase 2 stacks failed. Stage stacks may fail if their account stack did not deploy.');
+  // Check if any account stacks specifically failed
+  accountStacksFailed = accountResults.some(r => !r.success);
+  if (accountStacksFailed) {
+    logger.warn('Some Account stacks failed. Stage stacks may fail if their account OIDC provider did not deploy.');
   }
 
   // PHASE 3: Deploy Stage Stacks in parallel
@@ -605,6 +606,7 @@ async function deployPipelineStack(
     accountId: cicdAccountId,
     region: cicdRegion,
     credentials,
+    showProgress: false, // Disable progress bar for parallel deployment
   };
 
   // Preview changes
@@ -640,6 +642,7 @@ async function deployAccountStack(
     accountId: stack.accountId,
     region: stack.region,
     credentials,
+    showProgress: false, // Disable progress bar for parallel deployment
   };
 
   // Preview changes
@@ -687,6 +690,7 @@ async function deployStageStack(
     accountId: stack.accountId,
     region: stack.region,
     credentials,
+    showProgress: false, // Disable progress bar for parallel deployment
   };
 
   // Preview changes

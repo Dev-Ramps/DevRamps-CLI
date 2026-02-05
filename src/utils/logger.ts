@@ -7,33 +7,6 @@ import chalk from 'chalk';
 let verboseMode = false;
 
 /**
- * Get terminal height, with a fallback
- */
-function getTerminalHeight(): number {
-  return process.stdout.rows || 24;
-}
-
-/**
- * Track current line position for terminal buffer management
- */
-let linesOutputSinceProgress = 0;
-
-/**
- * Ensure there's always a buffer row before the bottom of the terminal
- */
-function ensureBottomBuffer(): void {
-  const termHeight = getTerminalHeight();
-  // Reserve 2 rows: one for the progress bar, one for buffer
-  const maxContentRows = termHeight - 2;
-
-  if (linesOutputSinceProgress >= maxContentRows) {
-    // We're getting close to the bottom, add some space
-    process.stdout.write('\n');
-    linesOutputSinceProgress = 0;
-  }
-}
-
-/**
  * Progress bar for tracking deployment progress
  */
 export class ProgressBar {
