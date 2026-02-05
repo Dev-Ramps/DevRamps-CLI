@@ -1,8 +1,11 @@
 /**
- * Browser-based authentication flow for DevRamps
+ * Browser-based OAuth 2.0 authentication flow with PKCE for DevRamps
  *
- * Opens a browser to devramps.com for the user to authenticate and select
- * their organization. The org data is returned to the CLI via a local callback.
+ * Implements RFC 7636 (PKCE) to securely authenticate CLI users:
+ * 1. Generate PKCE code_verifier and code_challenge
+ * 2. Open browser to /oauth/authorize with PKCE params
+ * 3. Receive authorization code via localhost callback
+ * 4. Exchange code for access token via POST to /oauth/token
  */
 
 import express from 'express';
@@ -11,18 +14,20 @@ import { createServer, type Server } from 'node:http';
 import { AuthenticationError } from '../utils/errors.js';
 import * as logger from '../utils/logger.js';
 import { isValidAwsAccountId, isValidAwsRegion } from '../utils/validation.js';
-import type { AuthData } from '../types/config.js';
+import type { AuthData, TokenResponse, OrganizationResponse, AwsConfigurationResponse } from '../types/config.js';
+import { generateCodeVerifier, generateCodeChallenge, generateState } from './pkce.js';
 
 const DEFAULT_AUTH_BASE_URL = 'https://devramps.com';
-const AUTH_PATH = '/cli/auth';
-const CALLBACK_PATH = '/callback';
+const AUTHORIZE_PATH = '/oauth/authorize';
+const TOKEN_PATH = '/oauth/token';
+const CLI_CLIENT_ID = 'devramps-cli';
 const AUTH_TIMEOUT_MS = 300000; // 5 minutes
 
-interface CallbackData {
-  orgSlug?: string;
-  cicdAccountId?: string;
-  cicdRegion?: string;
+interface CallbackResult {
+  code?: string;
+  state?: string;
   error?: string;
+  errorDescription?: string;
 }
 
 export interface AuthOptions {
@@ -30,12 +35,13 @@ export interface AuthOptions {
 }
 
 /**
- * Start the browser authentication flow
+ * Start the browser authentication flow using OAuth 2.0 with PKCE
  *
- * 1. Starts a local Express server on a random available port
- * 2. Opens the browser to devramps.com/cli/auth with the callback URL
- * 3. Waits for the callback with the org data
- * 4. Returns the org slug and other data
+ * 1. Generates PKCE code_verifier/code_challenge and state
+ * 2. Opens browser to /oauth/authorize with PKCE params
+ * 3. Receives authorization code via localhost callback
+ * 4. Exchanges code for access token via POST to /oauth/token
+ * 5. Returns the auth data (org, account, region)
  *
  * @param options.endpointOverride - Override the base URL (e.g., http://localhost:3000 for testing)
  */
@@ -48,14 +54,31 @@ export async function authenticateViaBrowser(options: AuthOptions = {}): Promise
   }
   logger.verbose('Starting local callback server...');
 
-  const { server, port, dataPromise } = await startCallbackServer();
+  // Generate PKCE parameters
+  const codeVerifier = generateCodeVerifier();
+  const codeChallenge = generateCodeChallenge(codeVerifier);
+  const state = generateState();
+
+  logger.verbose('Generated PKCE code_challenge and state');
+
+  const { server, port, callbackPromise } = await startCallbackServer(state);
 
   try {
-    const callbackUrl = `http://localhost:${port}${CALLBACK_PATH}`;
-    const authUrl = `${baseUrl}${AUTH_PATH}?callback=${encodeURIComponent(callbackUrl)}`;
+    const redirectUri = `http://localhost:${port}`;
+
+    // Build authorization URL with OAuth 2.0 PKCE params
+    const authParams = new URLSearchParams({
+      response_type: 'code',
+      client_id: CLI_CLIENT_ID,
+      redirect_uri: redirectUri,
+      code_challenge: codeChallenge,
+      code_challenge_method: 'S256',
+      state: state,
+    });
+    const authUrl = `${baseUrl}${AUTHORIZE_PATH}?${authParams.toString()}`;
 
     logger.verbose(`Auth URL: ${authUrl}`);
-    logger.verbose(`Callback URL: ${callbackUrl}`);
+    logger.verbose(`Redirect URI: ${redirectUri}`);
 
     // Open the browser
     await open(authUrl);
@@ -64,38 +87,82 @@ export async function authenticateViaBrowser(options: AuthOptions = {}): Promise
     logger.verbose('Complete the authentication in your browser.');
 
     // Wait for the callback with timeout
-    const data = await Promise.race([
-      dataPromise,
+    const callbackResult = await Promise.race([
+      callbackPromise,
       timeout(AUTH_TIMEOUT_MS),
     ]);
 
-    if (!data) {
+    if (!callbackResult) {
       throw new AuthenticationError('Authentication timed out. Please try again.');
     }
 
-    if (data.error) {
-      throw new AuthenticationError(data.error);
+    if (callbackResult.error) {
+      const errorMsg = callbackResult.errorDescription || callbackResult.error;
+      throw new AuthenticationError(errorMsg);
     }
 
-    if (!data.orgSlug) {
-      throw new AuthenticationError('No organization selected. Please try again.');
+    if (!callbackResult.code) {
+      throw new AuthenticationError('No authorization code received. Please try again.');
     }
 
-    if (!data.cicdAccountId) {
-      throw new AuthenticationError('No CI/CD account ID received. Please try again.');
+    // State is already verified in callback handler, but double-check
+    if (callbackResult.state !== state) {
+      throw new AuthenticationError('State mismatch - possible CSRF attack. Please try again.');
     }
 
-    if (!data.cicdRegion) {
-      throw new AuthenticationError('No CI/CD region received. Please try again.');
+    logger.verbose('Received authorization code, exchanging for access token...');
+
+    // Exchange authorization code for access token
+    const tokenResponse = await exchangeCodeForToken({
+      baseUrl,
+      code: callbackResult.code,
+      redirectUri,
+      codeVerifier,
+    });
+
+    if (!tokenResponse.organization_id) {
+      throw new AuthenticationError('No organization ID in token response. Please try again.');
     }
 
-    logger.success(`Authenticated with organization: ${data.orgSlug}`);
-    logger.verbose(`CI/CD Account: ${data.cicdAccountId}, Region: ${data.cicdRegion}`);
+    logger.verbose('Fetching organization details...');
+
+    // Fetch organization details to get the slug
+    const orgResponse = await fetchOrganization({
+      baseUrl,
+      accessToken: tokenResponse.access_token,
+      organizationId: tokenResponse.organization_id,
+    });
+
+    // Fetch AWS configuration to get CI/CD account and region
+    const awsConfig = await fetchAwsConfiguration({
+      baseUrl,
+      accessToken: tokenResponse.access_token,
+      organizationId: tokenResponse.organization_id,
+    });
+
+    // Get CI/CD account ID - can be in cicdAccountId directly or nested in cicdAccount.accountId
+    const cicdAccountId = awsConfig.cicdAccountId || awsConfig.cicdAccount?.accountId;
+
+    // Validate AWS configuration
+    if (!cicdAccountId) {
+      throw new AuthenticationError('No CI/CD account configured for this organization. Please configure one in the DevRamps dashboard.');
+    }
+
+    if (!isValidAwsAccountId(cicdAccountId)) {
+      throw new AuthenticationError('Invalid CI/CD account ID format.');
+    }
+
+    if (!awsConfig.defaultRegion || !isValidAwsRegion(awsConfig.defaultRegion)) {
+      throw new AuthenticationError('Invalid or missing default AWS region.');
+    }
+
+    logger.success(`Authenticated with organization: ${orgResponse.slug}`);
+    logger.verbose(`CI/CD Account: ${cicdAccountId}, Region: ${awsConfig.defaultRegion}`);
 
     return {
-      orgSlug: data.orgSlug,
-      cicdAccountId: data.cicdAccountId,
-      cicdRegion: data.cicdRegion,
+      orgSlug: orgResponse.slug,
+      cicdAccountId: cicdAccountId,
+      cicdRegion: awsConfig.defaultRegion,
     };
   } finally {
     // Always close the server
@@ -104,67 +171,178 @@ export async function authenticateViaBrowser(options: AuthOptions = {}): Promise
 }
 
 /**
- * Start a local Express server to receive the callback
+ * Exchange authorization code for access token via POST to /oauth/token
  */
-async function startCallbackServer(): Promise<{
+async function exchangeCodeForToken(params: {
+  baseUrl: string;
+  code: string;
+  redirectUri: string;
+  codeVerifier: string;
+}): Promise<TokenResponse> {
+  const tokenUrl = `${params.baseUrl}${TOKEN_PATH}`;
+
+  // Build form-encoded body per OAuth 2.0 spec
+  const body = new URLSearchParams({
+    grant_type: 'authorization_code',
+    client_id: CLI_CLIENT_ID,
+    code: params.code,
+    redirect_uri: params.redirectUri,
+    code_verifier: params.codeVerifier,
+  });
+
+  logger.verbose(`Token exchange URL: ${tokenUrl}`);
+
+  const response = await fetch(tokenUrl, {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/x-www-form-urlencoded',
+      Accept: 'application/json',
+    },
+    body: body.toString(),
+  });
+
+  if (!response.ok) {
+    let errorMessage = `Token exchange failed with status ${response.status}`;
+    try {
+      const errorBody = await response.json() as { error?: string; error_description?: string };
+      if (errorBody.error_description) {
+        errorMessage = errorBody.error_description;
+      } else if (errorBody.error) {
+        errorMessage = `Token exchange failed: ${errorBody.error}`;
+      }
+    } catch {
+      // Ignore JSON parse errors, use default message
+    }
+    throw new AuthenticationError(errorMessage);
+  }
+
+  const tokenResponse = await response.json() as TokenResponse;
+
+  if (!tokenResponse.access_token) {
+    throw new AuthenticationError('No access token in response');
+  }
+
+  logger.verbose(`Token response: organization_id=${tokenResponse.organization_id}, scope=${tokenResponse.scope}, expires_in=${tokenResponse.expires_in}`);
+
+  return tokenResponse;
+}
+
+/**
+ * Fetch organization details from the API
+ */
+async function fetchOrganization(params: {
+  baseUrl: string;
+  accessToken: string;
+  organizationId: string;
+}): Promise<OrganizationResponse> {
+  const url = `${params.baseUrl}/api/v1/organizations/${params.organizationId}`;
+
+  logger.verbose(`Fetching organization: GET ${url}`);
+
+  const response = await fetch(url, {
+    method: 'GET',
+    headers: {
+      Authorization: `Bearer ${params.accessToken}`,
+      Accept: 'application/json',
+    },
+  });
+
+  logger.verbose(`Organization response status: ${response.status}`);
+
+  if (!response.ok) {
+    const errorText = await response.text();
+    logger.verbose(`Organization error response: ${errorText}`);
+    throw new AuthenticationError(`Failed to fetch organization: ${response.status}`);
+  }
+
+  const data = await response.json() as OrganizationResponse;
+  logger.verbose(`Organization data: id=${data.id}, name=${data.name}, slug=${data.slug}`);
+
+  return data;
+}
+
+/**
+ * Fetch AWS configuration for the organization
+ */
+async function fetchAwsConfiguration(params: {
+  baseUrl: string;
+  accessToken: string;
+  organizationId: string;
+}): Promise<AwsConfigurationResponse> {
+  const url = `${params.baseUrl}/api/v1/organizations/${params.organizationId}/aws/configuration`;
+
+  logger.verbose(`Fetching AWS configuration: GET ${url}`);
+
+  const response = await fetch(url, {
+    method: 'GET',
+    headers: {
+      Authorization: `Bearer ${params.accessToken}`,
+      Accept: 'application/json',
+    },
+  });
+
+  logger.verbose(`AWS configuration response status: ${response.status}`);
+
+  if (!response.ok) {
+    const errorText = await response.text();
+    logger.verbose(`AWS configuration error response: ${errorText}`);
+    throw new AuthenticationError(`Failed to fetch AWS configuration: ${response.status}`);
+  }
+
+  const data = await response.json() as AwsConfigurationResponse;
+  logger.verbose(`AWS configuration data: defaultRegion=${data.defaultRegion}, cicdAccountId=${data.cicdAccountId}, cicdAccount=${JSON.stringify(data.cicdAccount)}`);
+
+  return data;
+}
+
+/**
+ * Start a local Express server to receive the OAuth callback
+ */
+async function startCallbackServer(expectedState: string): Promise<{
   server: Server;
   port: number;
-  dataPromise: Promise<CallbackData>;
+  callbackPromise: Promise<CallbackResult>;
 }> {
   const app = express();
 
-  let resolveData: (data: CallbackData) => void;
-  const dataPromise = new Promise<CallbackData>((resolve) => {
-    resolveData = resolve;
+  let resolveCallback: (result: CallbackResult) => void;
+  const callbackPromise = new Promise<CallbackResult>((resolve) => {
+    resolveCallback = resolve;
   });
 
-  // Callback endpoint
-  app.get(CALLBACK_PATH, (req, res) => {
-    const { org_slug, cicd_account_id, cicd_region, error } = req.query;
+  // Root path callback endpoint (OAuth redirects to /?code=...&state=...)
+  app.get('/', (req, res) => {
+    const { code, state, error, error_description } = req.query;
 
+    // Handle OAuth error response
     if (error) {
-      res.send(errorPage(String(error)));
-      resolveData({ error: String(error) });
+      res.send(errorPage(String(error_description || error)));
+      resolveCallback({
+        error: String(error),
+        errorDescription: error_description ? String(error_description) : undefined,
+      });
       return;
     }
 
-    if (!org_slug || typeof org_slug !== 'string') {
-      res.send(errorPage('No organization was selected'));
-      resolveData({ error: 'No organization was selected' });
+    // Validate state to prevent CSRF
+    if (!state || state !== expectedState) {
+      res.send(errorPage('Invalid state parameter - possible CSRF attack'));
+      resolveCallback({ error: 'state_mismatch' });
       return;
     }
 
-    if (!cicd_account_id || typeof cicd_account_id !== 'string') {
-      res.send(errorPage('No CI/CD account ID received'));
-      resolveData({ error: 'No CI/CD account ID received' });
+    // Validate code is present
+    if (!code || typeof code !== 'string') {
+      res.send(errorPage('No authorization code received'));
+      resolveCallback({ error: 'missing_code' });
       return;
     }
 
-    // Validate cicd_account_id format (must be exactly 12 digits)
-    if (!isValidAwsAccountId(cicd_account_id)) {
-      res.send(errorPage('Invalid CI/CD account ID format'));
-      resolveData({ error: 'Invalid CI/CD account ID format. Expected 12 digits.' });
-      return;
-    }
-
-    if (!cicd_region || typeof cicd_region !== 'string') {
-      res.send(errorPage('No CI/CD region received'));
-      resolveData({ error: 'No CI/CD region received' });
-      return;
-    }
-
-    // Validate cicd_region format (must be a valid AWS region)
-    if (!isValidAwsRegion(cicd_region)) {
-      res.send(errorPage('Invalid CI/CD region format'));
-      resolveData({ error: `Invalid CI/CD region: "${cicd_region}". Expected a valid AWS region.` });
-      return;
-    }
-
-    res.send(successPage(org_slug));
-    resolveData({
-      orgSlug: org_slug,
-      cicdAccountId: cicd_account_id,
-      cicdRegion: cicd_region,
+    // Success - show confirmation page
+    res.send(successPage());
+    resolveCallback({
+      code: code,
+      state: String(state),
     });
   });
 
@@ -182,7 +360,7 @@ async function startCallbackServer(): Promise<{
       const port = address.port;
       logger.verbose(`Callback server listening on port ${port}`);
 
-      resolve({ server, port, dataPromise });
+      resolve({ server, port, callbackPromise });
     });
 
     server.on('error', reject);
@@ -215,7 +393,7 @@ function timeout(ms: number): Promise<never> {
 /**
  * Success page HTML
  */
-function successPage(orgSlug: string): string {
+function successPage(): string {
   return `
 <!DOCTYPE html>
 <html>
@@ -246,13 +424,6 @@ function successPage(orgSlug: string): string {
     p {
       opacity: 0.9;
     }
-    .org {
-      background: rgba(255,255,255,0.2);
-      padding: 0.5rem 1rem;
-      border-radius: 4px;
-      display: inline-block;
-      margin-top: 1rem;
-    }
   </style>
 </head>
 <body>
@@ -260,7 +431,6 @@ function successPage(orgSlug: string): string {
     <div class="checkmark">&#10003;</div>
     <h1>Authentication Successful</h1>
     <p>You can close this window and return to your terminal.</p>
-    <div class="org">Organization: ${orgSlug}</div>
   </div>
 </body>
 </html>

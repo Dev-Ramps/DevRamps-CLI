@@ -59,7 +59,7 @@ export async function assumeRoleForAccount(
 
   // All role attempts failed
   const attemptedRole = targetRoleName || `${DEFAULT_TARGET_ROLE} or ${FALLBACK_TARGET_ROLE}`;
-  throw new RoleAssumptionError(targetAccountId, attemptedRole);
+  throw new RoleAssumptionError(targetAccountId, attemptedRole, currentAccountId);
 }
 
 // Default region for STS (global service, any region works)
