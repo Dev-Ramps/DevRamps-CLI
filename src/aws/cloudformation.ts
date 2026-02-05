@@ -250,6 +250,7 @@ async function waitForStackWithProgress(
 
   const progress = getMultiStackProgress();
   let latestResourceId = '';
+  let latestFailureReason = ''; // Capture actual failure reasons from events
 
   logger.verbose(`[${stackName}] Starting to wait for stack operation...`);
 
@@ -306,6 +307,12 @@ async function waitForStackWithProgress(
           if (isResourceComplete(status)) {
             completedResources.add(logicalId);
           }
+
+          // Capture failure reasons
+          if (status.includes('FAILED') && event.ResourceStatusReason) {
+            latestFailureReason = `${logicalId}: ${event.ResourceStatusReason}`;
+            logger.verbose(`[${stackName}] Failure reason: ${latestFailureReason}`);
+          }
         }
       }
 
@@ -323,7 +330,8 @@ async function waitForStackWithProgress(
       // Check if we've reached a terminal state
       if (TERMINAL_STATES.has(currentStatus)) {
         const success = SUCCESS_STATES.has(currentStatus);
-        const failureReason = success ? undefined : currentStatus;
+        // Use actual failure reason if available, otherwise use the CFN status
+        const failureReason = success ? undefined : (latestFailureReason || currentStatus);
         progress.completeStack(stackName, accountId, region, success, failureReason);
         logger.verbose(`[${stackName}] Reached terminal state: ${currentStatus} (success: ${success})`);
         if (success) {

@@ -400,18 +400,18 @@ async function executeDeployment(
   // Initialize multi-stack progress display
   const progress = getMultiStackProgress();
 
-  // Register all stacks with estimated resource counts
-  progress.addStack(plan.orgStack.stackName, plan.orgStack.accountId, plan.orgStack.region, 5);
+  // Register all stacks with estimated resource counts and types
+  progress.addStack(plan.orgStack.stackName, 'org', plan.orgStack.accountId, plan.orgStack.region, 5);
   for (const stack of plan.pipelineStacks) {
     const resourceCount = stack.dockerArtifacts.length + stack.bundleArtifacts.length;
-    progress.addStack(stack.stackName, stack.accountId, stack.region, Math.max(resourceCount, 1));
+    progress.addStack(stack.stackName, 'pipeline', stack.accountId, stack.region, Math.max(resourceCount, 1));
   }
   for (const stack of plan.accountStacks) {
-    progress.addStack(stack.stackName, stack.accountId, stack.region, 1);
+    progress.addStack(stack.stackName, 'account', stack.accountId, stack.region, 1);
   }
   for (const stack of plan.stageStacks) {
     const resourceCount = stack.dockerArtifacts.length + stack.bundleArtifacts.length + 2;
-    progress.addStack(stack.stackName, stack.accountId, stack.region, resourceCount);
+    progress.addStack(stack.stackName, 'stage', stack.accountId, stack.region, resourceCount);
   }
 
   // Start the progress display (enters alternate screen)

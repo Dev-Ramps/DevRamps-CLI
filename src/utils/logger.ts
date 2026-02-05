@@ -17,10 +17,16 @@ export interface ResourceStatus {
 }
 
 /**
+ * Stack type for display purposes
+ */
+export type StackType = 'org' | 'pipeline' | 'account' | 'stage';
+
+/**
  * Stack status for multi-stack progress display
  */
 export interface StackProgressState {
   stackName: string;
+  stackType: StackType;
   accountId: string;
   region: string;
   completed: number;
@@ -56,6 +62,7 @@ export class MultiStackProgress {
   private lastRenderTime = 0;
   private hasRenderedOnce = false;
   private useAltScreen = true; // Use alternate screen buffer for clean display
+  private maxStackNameLen = 40; // Will be calculated dynamically
 
   constructor() {
     this.isTTY = process.stdout.isTTY ?? false;
@@ -65,6 +72,12 @@ export class MultiStackProgress {
    * Start the progress display (call after all stacks are registered)
    */
   start(): void {
+    // Calculate max stack name length from all registered stacks
+    this.maxStackNameLen = Math.max(
+      ...Array.from(this.stacks.values()).map(s => s.stackName.length),
+      20 // minimum width
+    );
+
     if (this.isTTY) {
       if (this.useAltScreen) {
         // Enter alternate screen buffer (like vim/less do)
@@ -89,7 +102,7 @@ export class MultiStackProgress {
   /**
    * Register a stack to track
    */
-  addStack(stackName: string, accountId: string, region: string, totalResources: number): void {
+  addStack(stackName: string, stackType: StackType, accountId: string, region: string, totalResources: number): void {
     const key = getStackKey(stackName, accountId, region);
 
     // Don't add duplicates
@@ -99,6 +112,7 @@ export class MultiStackProgress {
 
     this.stacks.set(key, {
       stackName,
+      stackType,
       accountId,
       region,
       completed: 0,
@@ -211,10 +225,22 @@ export class MultiStackProgress {
   }
 
   /**
+   * Get a short label for stack type
+   */
+  private getTypeLabel(stackType: StackType): string {
+    switch (stackType) {
+      case 'org': return 'ORG';
+      case 'pipeline': return 'PIPE';
+      case 'account': return 'ACCT';
+      case 'stage': return 'STAGE';
+    }
+  }
+
+  /**
    * Format a single stack line
    */
   private formatStackLine(stack: StackProgressState, withSpinner: boolean): string {
-    const { accountId, region, stackName, completed, total, status, cfnStatus, latestResourceId, failureReason } = stack;
+    const { accountId, region, stackName, stackType, completed, total, status, cfnStatus, latestResourceId, failureReason } = stack;
 
     // Status indicator
     let statusIndicator: string;
@@ -245,39 +271,46 @@ export class MultiStackProgress {
     const empty = this.barWidth - filled;
     const bar = '█'.repeat(filled) + '░'.repeat(empty);
 
+    // Stack type label (fixed width)
+    const typeLabel = this.getTypeLabel(stackType).padEnd(5);
+
     // Full account ID and region
-    const accountLabel = `${accountId} ${region}`;
+    const accountLabel = `${accountId} ${region.padEnd(12)}`;
 
     // Progress count
     const countLabel = `${completed}/${total}`;
 
-    // Build the line - truncate stack name to fit
-    const maxStackNameLen = 35;
-    const displayName = stackName.length > maxStackNameLen
-      ? stackName.slice(0, maxStackNameLen - 3) + '...'
-      : stackName.padEnd(maxStackNameLen);
+    // Stack name - use dynamic width, no truncation since we calculated max
+    const displayName = stackName.padEnd(this.maxStackNameLen);
 
     // Right side info - show CFN status, current resource, or failure reason
     let rightInfo = '';
-    if (status === 'failed' && failureReason) {
-      // Show truncated failure reason
-      const maxLen = 40;
-      rightInfo = failureReason.length > maxLen
-        ? failureReason.slice(0, maxLen - 3) + '...'
-        : failureReason;
+    if (status === 'failed' || status === 'rollback') {
+      // Show the CFN status and failure reason if available
+      const statusText = cfnStatus || 'FAILED';
+      if (failureReason && failureReason !== cfnStatus) {
+        // Show both status and reason
+        const maxLen = 50;
+        const fullReason = `${statusText}: ${failureReason}`;
+        rightInfo = fullReason.length > maxLen
+          ? fullReason.slice(0, maxLen - 3) + '...'
+          : fullReason;
+      } else {
+        rightInfo = statusText;
+      }
     } else if (status === 'in_progress') {
       // Show CFN status and current resource
       const cfnStatusDisplay = cfnStatus || 'DEPLOYING';
       const resourceDisplay = latestResourceId
-        ? (latestResourceId.length > 20 ? latestResourceId.slice(0, 17) + '...' : latestResourceId)
+        ? (latestResourceId.length > 25 ? latestResourceId.slice(0, 22) + '...' : latestResourceId)
         : '';
       rightInfo = resourceDisplay ? `${cfnStatusDisplay} → ${resourceDisplay}` : cfnStatusDisplay;
     } else if (status === 'complete') {
-      rightInfo = 'COMPLETE';
+      rightInfo = cfnStatus || 'COMPLETE';
     }
 
     // Build the full line
-    const leftPart = `${statusIndicator} ${accountLabel} ${displayName}`;
+    const leftPart = `${statusIndicator} [${typeLabel}] ${accountLabel} ${displayName}`;
     const middlePart = `[${bar}] ${countLabel}`;
     const line = `${leftPart} ${middlePart} ${rightInfo}`;
 
