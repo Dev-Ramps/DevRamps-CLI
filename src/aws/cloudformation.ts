@@ -70,7 +70,8 @@ export async function getStackStatus(
 }
 
 /**
- * Preview what changes will be made to a stack by creating and describing a change set
+ * Preview what changes will be made to a stack by creating and describing a change set.
+ * Note: Only previews updates to existing stacks. For new stacks, logs that they will be created.
  */
 export async function previewStackChanges(options: DeployStackOptions): Promise<void> {
   const { stackName, template, region, credentials } = options;
@@ -84,15 +85,22 @@ export async function previewStackChanges(options: DeployStackOptions): Promise<
   const stackStatus = await getStackStatus(stackName, credentials, region);
   const changeSetName = `devramps-preview-${Date.now()}`;
 
+  // Skip preview for new stacks - creating a change set with ChangeSetType.CREATE
+  // puts the stack into REVIEW_IN_PROGRESS status, which blocks subsequent deployments
+  if (!stackStatus.exists) {
+    logger.info(`  Stack ${stackName} will be created (new stack)`);
+    return;
+  }
+
   try {
-    // Create a change set to preview changes
+    // Create a change set to preview changes (only for existing stacks)
     await client.send(
       new CreateChangeSetCommand({
         StackName: stackName,
         ChangeSetName: changeSetName,
         TemplateBody: templateBody,
         Capabilities: ['CAPABILITY_NAMED_IAM'],
-        ChangeSetType: stackStatus.exists ? ChangeSetType.UPDATE : ChangeSetType.CREATE,
+        ChangeSetType: ChangeSetType.UPDATE,
       })
     );
 
