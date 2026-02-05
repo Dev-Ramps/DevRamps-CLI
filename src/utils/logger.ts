@@ -34,6 +34,13 @@ export interface StackProgressState {
 const SPINNER_FRAMES = ['⠋', '⠙', '⠹', '⠸', '⠼', '⠴', '⠦', '⠧', '⠇', '⠏'];
 
 /**
+ * Generate a unique key for a stack (same stack name can exist in multiple accounts)
+ */
+function getStackKey(stackName: string, accountId: string, region: string): string {
+  return `${stackName}:${accountId}:${region}`;
+}
+
+/**
  * Multi-stack progress display for parallel deployments
  */
 export class MultiStackProgress {
@@ -60,7 +67,14 @@ export class MultiStackProgress {
    * Register a stack to track
    */
   addStack(stackName: string, accountId: string, region: string, totalResources: number): void {
-    this.stacks.set(stackName, {
+    const key = getStackKey(stackName, accountId, region);
+
+    // Don't add duplicates
+    if (this.stacks.has(key)) {
+      return;
+    }
+
+    this.stacks.set(key, {
       stackName,
       accountId,
       region,
@@ -68,7 +82,7 @@ export class MultiStackProgress {
       total: totalResources,
       status: 'pending',
     });
-    this.stackOrder.push(stackName);
+    this.stackOrder.push(key);
     this.render();
   }
 
@@ -77,12 +91,15 @@ export class MultiStackProgress {
    */
   updateStack(
     stackName: string,
+    accountId: string,
+    region: string,
     completed: number,
     status: StackProgressState['status'],
     latestEvent?: string,
     latestResourceId?: string
   ): void {
-    const stack = this.stacks.get(stackName);
+    const key = getStackKey(stackName, accountId, region);
+    const stack = this.stacks.get(key);
     if (stack) {
       stack.completed = completed;
       stack.status = status;
@@ -95,8 +112,9 @@ export class MultiStackProgress {
   /**
    * Mark a stack as started
    */
-  startStack(stackName: string): void {
-    const stack = this.stacks.get(stackName);
+  startStack(stackName: string, accountId: string, region: string): void {
+    const key = getStackKey(stackName, accountId, region);
+    const stack = this.stacks.get(key);
     if (stack) {
       stack.status = 'in_progress';
       this.render();
@@ -106,8 +124,9 @@ export class MultiStackProgress {
   /**
    * Mark a stack as complete
    */
-  completeStack(stackName: string, success: boolean): void {
-    const stack = this.stacks.get(stackName);
+  completeStack(stackName: string, accountId: string, region: string, success: boolean): void {
+    const key = getStackKey(stackName, accountId, region);
+    const stack = this.stacks.get(key);
     if (stack) {
       stack.status = success ? 'complete' : 'failed';
       stack.completed = success ? stack.total : stack.completed;
@@ -143,8 +162,8 @@ export class MultiStackProgress {
    * Render final state (no clearing, just print)
    */
   private renderFinal(): void {
-    for (const stackName of this.stackOrder) {
-      const stack = this.stacks.get(stackName);
+    for (const key of this.stackOrder) {
+      const stack = this.stacks.get(key);
       if (!stack) continue;
       console.log(this.formatStackLine(stack, false));
     }
@@ -185,27 +204,31 @@ export class MultiStackProgress {
     const empty = this.barWidth - filled;
     const bar = '█'.repeat(filled) + '░'.repeat(empty);
 
-    // Account/region label
-    const accountLabel = `[${accountId} - ${region}]`;
+    // Account/region label (truncate account to last 4 digits for readability)
+    const shortAccount = accountId.slice(-4);
+    const accountLabel = `[...${shortAccount}/${region}]`;
 
     // Progress count
     const countLabel = `(${completed}/${total})`;
 
     // Latest event (truncate if needed)
     let eventLabel = '';
-    if (latestEvent && latestResourceId) {
-      const maxEventLen = 30;
-      const resourceIdTrunc = latestResourceId.length > 20
-        ? latestResourceId.slice(0, 17) + '...'
+    if (status === 'in_progress' && latestEvent && latestResourceId) {
+      // Shorten the event status
+      const shortStatus = latestEvent.replace('CREATE_', '').replace('UPDATE_', '').replace('DELETE_', '');
+      const resourceIdTrunc = latestResourceId.length > 15
+        ? latestResourceId.slice(0, 12) + '...'
         : latestResourceId;
-      eventLabel = ` ${latestEvent} ${resourceIdTrunc}`;
-      if (eventLabel.length > maxEventLen) {
-        eventLabel = eventLabel.slice(0, maxEventLen - 3) + '...';
-      }
+      eventLabel = ` ${shortStatus} ${resourceIdTrunc}`;
     }
 
-    // Build the line
-    const line = `${statusIndicator} ${accountLabel} ${stackName} [${bar}] ${countLabel}${eventLabel}`;
+    // Build the line - keep stack name reasonably short
+    const maxStackNameLen = 40;
+    const displayName = stackName.length > maxStackNameLen
+      ? '...' + stackName.slice(-(maxStackNameLen - 3))
+      : stackName;
+
+    const line = `${statusIndicator} ${accountLabel} ${displayName} [${bar}] ${countLabel}${eventLabel}`;
     return colorFn(line);
   }
 
@@ -213,23 +236,33 @@ export class MultiStackProgress {
    * Render all stack progress bars
    */
   private render(): void {
-    if (!this.isTTY) return;
+    // Skip if already rendering (prevent race conditions)
+    if (this.isRendering) return;
+    this.isRendering = true;
 
-    this.clear();
+    try {
+      if (this.isTTY) {
+        this.clear();
 
-    const lines: string[] = [];
-    for (const stackName of this.stackOrder) {
-      const stack = this.stacks.get(stackName);
-      if (!stack) continue;
-      lines.push(this.formatStackLine(stack, true));
+        const lines: string[] = [];
+        for (const key of this.stackOrder) {
+          const stack = this.stacks.get(key);
+          if (!stack) continue;
+          lines.push(this.formatStackLine(stack, true));
+        }
+
+        // Write all lines
+        for (const line of lines) {
+          process.stdout.write(line + '\n');
+        }
+        this.lastLineCount = lines.length;
+      }
+    } finally {
+      this.isRendering = false;
     }
-
-    // Write all lines
-    for (const line of lines) {
-      process.stdout.write(line + '\n');
-    }
-    this.lastLineCount = lines.length;
   }
+
+  private isRendering = false;
 }
 
 // Global multi-stack progress instance
