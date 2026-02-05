@@ -414,6 +414,9 @@ async function executeDeployment(
     progress.addStack(stack.stackName, stack.accountId, stack.region, resourceCount);
   }
 
+  // Start the progress display (enters alternate screen)
+  progress.start();
+
   // Create deployment promises for all stacks
   const orgPromise = (async () => {
     try {

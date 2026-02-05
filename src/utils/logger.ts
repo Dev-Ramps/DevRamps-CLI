@@ -26,8 +26,9 @@ export interface StackProgressState {
   completed: number;
   total: number;
   status: 'pending' | 'in_progress' | 'complete' | 'failed' | 'rollback';
-  latestEvent?: string;
+  cfnStatus?: string; // The actual CloudFormation status
   latestResourceId?: string;
+  failureReason?: string;
 }
 
 // Spinner frames for in-progress indication
@@ -42,24 +43,46 @@ function getStackKey(stackName: string, accountId: string, region: string): stri
 
 /**
  * Multi-stack progress display for parallel deployments
+ * Uses alternate screen buffer and debounced render to prevent terminal corruption
  */
 export class MultiStackProgress {
   private stacks: Map<string, StackProgressState> = new Map();
   private stackOrder: string[] = [];
-  private lastLineCount = 0;
   private isTTY: boolean;
   private spinnerFrame = 0;
   private spinnerInterval: ReturnType<typeof setInterval> | null = null;
   private barWidth = 20;
+  private renderScheduled = false;
+  private lastRenderTime = 0;
+  private hasRenderedOnce = false;
+  private useAltScreen = true; // Use alternate screen buffer for clean display
 
   constructor() {
     this.isTTY = process.stdout.isTTY ?? false;
+  }
+
+  /**
+   * Start the progress display (call after all stacks are registered)
+   */
+  start(): void {
     if (this.isTTY) {
-      // Start spinner animation
+      if (this.useAltScreen) {
+        // Enter alternate screen buffer (like vim/less do)
+        process.stdout.write('\x1b[?1049h');
+      }
+      // Hide cursor during updates
+      process.stdout.write('\x1b[?25l');
+      // Move to top-left
+      process.stdout.write('\x1b[H');
+      // Clear screen
+      process.stdout.write('\x1b[2J');
+      // Do initial render
+      this.doRender();
+      // Start spinner animation (slower to reduce flicker)
       this.spinnerInterval = setInterval(() => {
         this.spinnerFrame = (this.spinnerFrame + 1) % SPINNER_FRAMES.length;
-        this.render();
-      }, 80);
+        this.scheduleRender();
+      }, 100);
     }
   }
 
@@ -83,7 +106,6 @@ export class MultiStackProgress {
       status: 'pending',
     });
     this.stackOrder.push(key);
-    this.render();
   }
 
   /**
@@ -95,7 +117,7 @@ export class MultiStackProgress {
     region: string,
     completed: number,
     status: StackProgressState['status'],
-    latestEvent?: string,
+    cfnStatus?: string,
     latestResourceId?: string
   ): void {
     const key = getStackKey(stackName, accountId, region);
@@ -103,9 +125,9 @@ export class MultiStackProgress {
     if (stack) {
       stack.completed = completed;
       stack.status = status;
-      if (latestEvent) stack.latestEvent = latestEvent;
+      if (cfnStatus) stack.cfnStatus = cfnStatus;
       if (latestResourceId) stack.latestResourceId = latestResourceId;
-      this.render();
+      this.scheduleRender();
     }
   }
 
@@ -117,32 +139,44 @@ export class MultiStackProgress {
     const stack = this.stacks.get(key);
     if (stack) {
       stack.status = 'in_progress';
-      this.render();
+      stack.cfnStatus = 'STARTING';
+      this.scheduleRender();
     }
   }
 
   /**
    * Mark a stack as complete
    */
-  completeStack(stackName: string, accountId: string, region: string, success: boolean): void {
+  completeStack(stackName: string, accountId: string, region: string, success: boolean, failureReason?: string): void {
     const key = getStackKey(stackName, accountId, region);
     const stack = this.stacks.get(key);
     if (stack) {
       stack.status = success ? 'complete' : 'failed';
       stack.completed = success ? stack.total : stack.completed;
-      this.render();
+      if (failureReason) stack.failureReason = failureReason;
+      this.scheduleRender();
     }
   }
 
   /**
-   * Clear the display
+   * Schedule a render (debounced to prevent too many updates)
    */
-  private clear(): void {
-    if (!this.isTTY) return;
-    for (let i = 0; i < this.lastLineCount; i++) {
-      process.stdout.write('\x1b[A\x1b[2K');
+  private scheduleRender(): void {
+    if (this.renderScheduled) return;
+
+    const now = Date.now();
+    const timeSinceLastRender = now - this.lastRenderTime;
+    const minInterval = 50; // Minimum 50ms between renders
+
+    if (timeSinceLastRender >= minInterval) {
+      this.doRender();
+    } else {
+      this.renderScheduled = true;
+      setTimeout(() => {
+        this.renderScheduled = false;
+        this.doRender();
+      }, minInterval - timeSinceLastRender);
     }
-    this.lastLineCount = 0;
   }
 
   /**
@@ -153,8 +187,15 @@ export class MultiStackProgress {
       clearInterval(this.spinnerInterval);
       this.spinnerInterval = null;
     }
-    this.clear();
-    // Final render
+    if (this.isTTY) {
+      // Show cursor again
+      process.stdout.write('\x1b[?25h');
+      if (this.useAltScreen) {
+        // Leave alternate screen buffer
+        process.stdout.write('\x1b[?1049l');
+      }
+    }
+    // Final static render to main screen
     this.renderFinal();
   }
 
@@ -173,7 +214,7 @@ export class MultiStackProgress {
    * Format a single stack line
    */
   private formatStackLine(stack: StackProgressState, withSpinner: boolean): string {
-    const { accountId, region, stackName, completed, total, status, latestEvent, latestResourceId } = stack;
+    const { accountId, region, stackName, completed, total, status, cfnStatus, latestResourceId, failureReason } = stack;
 
     // Status indicator
     let statusIndicator: string;
@@ -191,9 +232,9 @@ export class MultiStackProgress {
         break;
       case 'in_progress':
         statusIndicator = withSpinner ? SPINNER_FRAMES[this.spinnerFrame] : '⋯';
-        colorFn = chalk.blue;
+        colorFn = chalk.cyanBright; // Brighter blue for better readability
         break;
-      default:
+      default: // pending
         statusIndicator = '○';
         colorFn = chalk.gray;
     }
@@ -204,65 +245,78 @@ export class MultiStackProgress {
     const empty = this.barWidth - filled;
     const bar = '█'.repeat(filled) + '░'.repeat(empty);
 
-    // Account/region label (truncate account to last 4 digits for readability)
-    const shortAccount = accountId.slice(-4);
-    const accountLabel = `[...${shortAccount}/${region}]`;
+    // Full account ID and region
+    const accountLabel = `${accountId} ${region}`;
 
     // Progress count
-    const countLabel = `(${completed}/${total})`;
+    const countLabel = `${completed}/${total}`;
 
-    // Latest event (truncate if needed)
-    let eventLabel = '';
-    if (status === 'in_progress' && latestEvent && latestResourceId) {
-      // Shorten the event status
-      const shortStatus = latestEvent.replace('CREATE_', '').replace('UPDATE_', '').replace('DELETE_', '');
-      const resourceIdTrunc = latestResourceId.length > 15
-        ? latestResourceId.slice(0, 12) + '...'
-        : latestResourceId;
-      eventLabel = ` ${shortStatus} ${resourceIdTrunc}`;
+    // Build the line - truncate stack name to fit
+    const maxStackNameLen = 35;
+    const displayName = stackName.length > maxStackNameLen
+      ? stackName.slice(0, maxStackNameLen - 3) + '...'
+      : stackName.padEnd(maxStackNameLen);
+
+    // Right side info - show CFN status, current resource, or failure reason
+    let rightInfo = '';
+    if (status === 'failed' && failureReason) {
+      // Show truncated failure reason
+      const maxLen = 40;
+      rightInfo = failureReason.length > maxLen
+        ? failureReason.slice(0, maxLen - 3) + '...'
+        : failureReason;
+    } else if (status === 'in_progress') {
+      // Show CFN status and current resource
+      const cfnStatusDisplay = cfnStatus || 'DEPLOYING';
+      const resourceDisplay = latestResourceId
+        ? (latestResourceId.length > 20 ? latestResourceId.slice(0, 17) + '...' : latestResourceId)
+        : '';
+      rightInfo = resourceDisplay ? `${cfnStatusDisplay} → ${resourceDisplay}` : cfnStatusDisplay;
+    } else if (status === 'complete') {
+      rightInfo = 'COMPLETE';
     }
 
-    // Build the line - keep stack name reasonably short
-    const maxStackNameLen = 40;
-    const displayName = stackName.length > maxStackNameLen
-      ? '...' + stackName.slice(-(maxStackNameLen - 3))
-      : stackName;
+    // Build the full line
+    const leftPart = `${statusIndicator} ${accountLabel} ${displayName}`;
+    const middlePart = `[${bar}] ${countLabel}`;
+    const line = `${leftPart} ${middlePart} ${rightInfo}`;
 
-    const line = `${statusIndicator} ${accountLabel} ${displayName} [${bar}] ${countLabel}${eventLabel}`;
     return colorFn(line);
   }
 
   /**
-   * Render all stack progress bars
+   * Perform the actual render
    */
-  private render(): void {
-    // Skip if already rendering (prevent race conditions)
-    if (this.isRendering) return;
-    this.isRendering = true;
+  private doRender(): void {
+    this.lastRenderTime = Date.now();
 
-    try {
-      if (this.isTTY) {
-        this.clear();
+    if (!this.isTTY) return;
 
-        const lines: string[] = [];
-        for (const key of this.stackOrder) {
-          const stack = this.stacks.get(key);
-          if (!stack) continue;
-          lines.push(this.formatStackLine(stack, true));
-        }
+    // Move cursor to top-left
+    process.stdout.write('\x1b[H');
 
-        // Write all lines
-        for (const line of lines) {
-          process.stdout.write(line + '\n');
-        }
-        this.lastLineCount = lines.length;
-      }
-    } finally {
-      this.isRendering = false;
+    // Print header
+    process.stdout.write(chalk.bold.underline('Deploying Stacks') + '\x1b[K\n\n');
+
+    // Write all stack lines
+    for (const key of this.stackOrder) {
+      const stack = this.stacks.get(key);
+      if (!stack) continue;
+      // Write line and clear to end of line (in case previous line was longer)
+      process.stdout.write(this.formatStackLine(stack, true) + '\x1b[K\n');
     }
-  }
 
-  private isRendering = false;
+    // Print summary line
+    const completed = Array.from(this.stacks.values()).filter(s => s.status === 'complete').length;
+    const failed = Array.from(this.stacks.values()).filter(s => s.status === 'failed' || s.status === 'rollback').length;
+    const inProgress = Array.from(this.stacks.values()).filter(s => s.status === 'in_progress').length;
+    const pending = Array.from(this.stacks.values()).filter(s => s.status === 'pending').length;
+
+    process.stdout.write('\n');
+    process.stdout.write(chalk.gray(`Progress: ${completed} complete, ${inProgress} in progress, ${pending} pending, ${failed} failed`) + '\x1b[K\n');
+
+    this.hasRenderedOnce = true;
+  }
 }
 
 // Global multi-stack progress instance

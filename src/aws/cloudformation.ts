@@ -240,7 +240,7 @@ async function waitForStackWithProgress(
   accountId: string,
   region: string,
   operationStartTime: Date,
-  totalResources: number,
+  _totalResources: number,
   maxWaitTime: number = 600
 ): Promise<void> {
   const seenEventIds = new Set<string>();
@@ -249,7 +249,6 @@ async function waitForStackWithProgress(
   const pollInterval = 2000; // Poll every 2 seconds for more responsive updates
 
   const progress = getMultiStackProgress();
-  let latestEvent = '';
   let latestResourceId = '';
 
   logger.verbose(`[${stackName}] Starting to wait for stack operation...`);
@@ -299,8 +298,7 @@ async function waitForStackWithProgress(
 
         // Skip the stack itself
         if (logicalId && logicalId !== stackName) {
-          // Update latest event for display
-          latestEvent = status;
+          // Update latest resource for display
           latestResourceId = logicalId;
 
           logger.verbose(`[${stackName}] Resource ${logicalId}: ${status}`);
@@ -319,13 +317,14 @@ async function waitForStackWithProgress(
         displayStatus = 'failed';
       }
 
-      // Update progress display
-      progress.updateStack(stackName, accountId, region, completedResources.size, displayStatus, latestEvent, latestResourceId);
+      // Update progress display with CFN status
+      progress.updateStack(stackName, accountId, region, completedResources.size, displayStatus, currentStatus, latestResourceId);
 
       // Check if we've reached a terminal state
       if (TERMINAL_STATES.has(currentStatus)) {
         const success = SUCCESS_STATES.has(currentStatus);
-        progress.completeStack(stackName, accountId, region, success);
+        const failureReason = success ? undefined : currentStatus;
+        progress.completeStack(stackName, accountId, region, success, failureReason);
         logger.verbose(`[${stackName}] Reached terminal state: ${currentStatus} (success: ${success})`);
         if (success) {
           return; // Success!
