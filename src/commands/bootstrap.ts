@@ -1,22 +1,23 @@
 /**
  * Bootstrap command implementation
  *
- * Deploys a three-stack model:
+ * Deploys a four-stack model:
  * 1. Org Stack - One per org in CI/CD account (OIDC, org role, KMS, Terraform state)
  * 2. Pipeline Stacks - One per pipeline in CI/CD account (root ECR/S3 for artifacts)
- * 3. Stage Stacks - One per stage in stage's account/region (stage role, mirrored ECR/S3)
+ * 3. Account Stacks - One per account (OIDC provider only - must be unique per account)
+ * 4. Stage Stacks - One per stage in stage's account/region (stage role, mirrored ECR/S3)
  */
 
 import ora from 'ora';
 import { getCurrentIdentity } from '../aws/credentials.js';
 import { assumeRoleForAccount } from '../aws/assume-role.js';
 import { deployStack, getStackStatus, readExistingStack, previewStackChanges } from '../aws/cloudformation.js';
-import { checkOidcProviderExists } from '../aws/oidc-provider.js';
 import { authenticateViaBrowser } from '../auth/browser-auth.js';
 import { findDevrampsPipelines, parsePipeline } from '../parsers/pipeline.js';
 import { parseArtifacts, filterArtifactsForPipelineStack } from '../parsers/artifacts.js';
 import { generateOrgStackTemplate, getOrgStackName } from '../templates/org-stack.js';
 import { generatePipelineStackTemplate, getPipelineStackName } from '../templates/pipeline-stack.js';
+import { generateAccountStackTemplate, getAccountStackName } from '../templates/account-stack.js';
 import { generateStageStackTemplate, getStageStackName } from '../templates/stage-stack.js';
 import { generateTerraformStateBucketName } from '../naming/index.js';
 import { getBucketPolicyStrategy, type BucketPolicyData } from '../merge/index.js';
@@ -26,12 +27,13 @@ import { setVerbose } from '../utils/logger.js';
 import { confirmDeployment, confirmDryRun } from '../utils/prompts.js';
 import type { BootstrapOptions, AuthData } from '../types/config.js';
 import type { ParsedPipeline } from '../types/pipeline.js';
-import type {
-  DeploymentPlan,
-  OrgStackDeployment,
-  PipelineStackDeployment,
-  StageStackDeployment,
+import {
   StackType,
+  type DeploymentPlan,
+  type OrgStackDeployment,
+  type PipelineStackDeployment,
+  type AccountStackDeployment,
+  type StageStackDeployment,
 } from '../types/stacks.js';
 import type { ParsedArtifacts } from '../types/artifacts.js';
 
@@ -126,7 +128,7 @@ export async function bootstrapCommand(options: BootstrapOptions): Promise<void>
 }
 
 /**
- * Build the complete deployment plan for all three stack types
+ * Build the complete deployment plan for all stack types
  */
 async function buildDeploymentPlan(
   pipelines: ParsedPipeline[],
@@ -163,7 +165,7 @@ async function buildDeploymentPlan(
   // 1. Org Stack
   const orgStackName = getOrgStackName(orgSlug);
   const orgStack: OrgStackDeployment = {
-    stackType: 'Org' as StackType.ORG,
+    stackType: StackType.ORG,
     stackName: orgStackName,
     accountId: cicdAccountId,
     region: cicdRegion,
@@ -180,7 +182,7 @@ async function buildDeploymentPlan(
     const stackName = getPipelineStackName(pipeline.slug);
 
     pipelineStacks.push({
-      stackType: 'Pipeline' as StackType.PIPELINE,
+      stackType: StackType.PIPELINE,
       stackName,
       accountId: cicdAccountId,
       region: cicdRegion,
@@ -191,7 +193,47 @@ async function buildDeploymentPlan(
     });
   }
 
-  // 3. Stage Stacks
+  // 3. Account Stacks (one per unique target account for OIDC provider)
+  const accountStacks: AccountStackDeployment[] = [];
+  const accountStackName = getAccountStackName();
+
+  // Track accounts we've already added to avoid duplicates
+  const accountsWithStacks = new Set<string>();
+
+  for (const pipeline of pipelines) {
+    for (const stage of pipeline.stages) {
+      // Skip if we already have an account stack for this account
+      if (accountsWithStacks.has(stage.account_id)) {
+        continue;
+      }
+      accountsWithStacks.add(stage.account_id);
+
+      // Try to get credentials for this account
+      let accountCredentials;
+      try {
+        if (stage.account_id !== currentAccountId) {
+          const assumed = await assumeRoleForAccount({
+            targetAccountId: stage.account_id,
+            currentAccountId,
+            targetRoleName,
+          });
+          accountCredentials = assumed?.credentials;
+        }
+      } catch {
+        logger.verbose(`Could not assume role in ${stage.account_id} for status check`);
+      }
+
+      accountStacks.push({
+        stackType: StackType.ACCOUNT,
+        stackName: accountStackName,
+        accountId: stage.account_id,
+        region: cicdRegion, // Deploy in CI/CD region for consistency
+        action: await determineStackAction(accountStackName, accountCredentials, cicdRegion),
+      });
+    }
+  }
+
+  // 4. Stage Stacks
   const stageStacks: StageStackDeployment[] = [];
   for (const pipeline of pipelines) {
     const artifacts = pipelineArtifacts.get(pipeline.slug)!;
@@ -215,7 +257,7 @@ async function buildDeploymentPlan(
       }
 
       stageStacks.push({
-        stackType: 'Stage' as StackType.STAGE,
+        stackType: StackType.STAGE,
         stackName,
         accountId: stage.account_id,
         region: stage.region,
@@ -237,6 +279,7 @@ async function buildDeploymentPlan(
     cicdRegion,
     orgStack,
     pipelineStacks,
+    accountStacks,
     stageStacks,
   };
 }
@@ -275,21 +318,25 @@ async function showDryRunPlan(plan: DeploymentPlan): Promise<void> {
   logger.info(`    Target accounts with bucket access: ${plan.orgStack.targetAccountIds.length}`);
 
   logger.newline();
-  logger.info('Phase 2: Pipeline Stacks');
+  logger.info('Phase 2: Pipeline & Account Stacks (parallel)');
   for (const stack of plan.pipelineStacks) {
     logger.info(`  ${stack.action}: ${stack.stackName}`);
     logger.info(`    ECR repos: ${stack.dockerArtifacts.length}, S3 buckets: ${stack.bundleArtifacts.length}`);
   }
+  for (const stack of plan.accountStacks) {
+    logger.info(`  ${stack.action}: ${stack.stackName}`);
+    logger.info(`    Account: ${stack.accountId} (OIDC provider)`);
+  }
 
   logger.newline();
-  logger.info('Phase 3: Stage Stacks');
+  logger.info('Phase 3: Stage Stacks (parallel)');
   for (const stack of plan.stageStacks) {
     logger.info(`  ${stack.action}: ${stack.stackName}`);
     logger.info(`    Account: ${stack.accountId}, Region: ${stack.region}`);
     logger.info(`    ECR repos: ${stack.dockerArtifacts.length}, S3 buckets: ${stack.bundleArtifacts.length}`);
   }
 
-  const totalStacks = 1 + plan.pipelineStacks.length + plan.stageStacks.length;
+  const totalStacks = 1 + plan.pipelineStacks.length + plan.accountStacks.length + plan.stageStacks.length;
   logger.newline();
   logger.info(`Total stacks to deploy: ${totalStacks}`);
 }
@@ -298,12 +345,13 @@ async function showDryRunPlan(plan: DeploymentPlan): Promise<void> {
  * Confirm deployment with user
  */
 async function confirmDeploymentPlan(plan: DeploymentPlan): Promise<boolean> {
-  const totalStacks = 1 + plan.pipelineStacks.length + plan.stageStacks.length;
+  const totalStacks = 1 + plan.pipelineStacks.length + plan.accountStacks.length + plan.stageStacks.length;
 
   logger.newline();
   logger.info(`About to deploy ${totalStacks} stack(s):`);
   logger.info(`  - 1 Org stack (${plan.orgStack.action})`);
   logger.info(`  - ${plan.pipelineStacks.length} Pipeline stack(s)`);
+  logger.info(`  - ${plan.accountStacks.length} Account stack(s) (OIDC provider)`);
   logger.info(`  - ${plan.stageStacks.length} Stage stack(s)`);
 
   // Use the existing confirmDeployment prompt
@@ -313,13 +361,14 @@ async function confirmDeploymentPlan(plan: DeploymentPlan): Promise<boolean> {
     stacks: [
       { ...plan.orgStack, pipelineSlug: 'org', steps: [], additionalPoliciesCount: 0 },
       ...plan.pipelineStacks.map(s => ({ ...s, steps: [], additionalPoliciesCount: 0 })),
+      ...plan.accountStacks.map(s => ({ ...s, pipelineSlug: 'account', steps: [], additionalPoliciesCount: 0 })),
       ...plan.stageStacks.map(s => ({ ...s, steps: s.steps.map(st => st.name), additionalPoliciesCount: s.additionalPolicies.length })),
     ],
   });
 }
 
 /**
- * Execute the three-phase deployment
+ * Execute the two-phase deployment (org stack first, then all others in parallel)
  */
 async function executeDeployment(
   plan: DeploymentPlan,
@@ -346,36 +395,98 @@ async function executeDeployment(
     throw error;
   }
 
-  // PHASE 2: Deploy Pipeline Stacks (can be parallel, but doing sequential for clarity)
+  // PHASE 2: Deploy Pipeline & Account Stacks in parallel
+  // Account stacks create OIDC providers (must complete before stage stacks)
   logger.newline();
-  logger.header('Phase 2: Pipeline Stacks');
+  logger.header('Phase 2: Pipeline & Account Stacks (parallel)');
 
-  for (const stack of plan.pipelineStacks) {
-    const spinner = ora(`Deploying ${stack.stackName}...`).start();
+  const totalPhase2Stacks = plan.pipelineStacks.length + plan.accountStacks.length;
+  logger.info(`Deploying ${totalPhase2Stacks} stack(s) in parallel...`);
+  logger.newline();
 
+  // Create deployment promises for all pipeline stacks
+  const pipelinePromises = plan.pipelineStacks.map(async (stack) => {
     try {
       await deployPipelineStack(stack, authData, currentAccountId, options);
-      spinner.succeed(`${stack.stackName} deployed`);
-      results.success++;
+      return { stack: stack.stackName, success: true };
     } catch (error) {
-      spinner.fail(`${stack.stackName} failed: ${error instanceof Error ? error.message : String(error)}`);
+      return {
+        stack: stack.stackName,
+        success: false,
+        error: error instanceof Error ? error.message : String(error),
+      };
+    }
+  });
+
+  // Create deployment promises for all account stacks
+  const accountPromises = plan.accountStacks.map(async (stack) => {
+    try {
+      await deployAccountStack(stack, currentAccountId, options);
+      return { stack: `${stack.stackName} (${stack.accountId})`, success: true };
+    } catch (error) {
+      return {
+        stack: `${stack.stackName} (${stack.accountId})`,
+        success: false,
+        error: error instanceof Error ? error.message : String(error),
+      };
+    }
+  });
+
+  // Wait for pipeline and account stacks to complete (separately for precise failure tracking)
+  const pipelineResults = await Promise.all(pipelinePromises);
+  const accountResults = await Promise.all(accountPromises);
+
+  // Process phase 2 results
+  logger.newline();
+  let accountStacksFailed = false;
+  for (const result of [...pipelineResults, ...accountResults]) {
+    if (result.success) {
+      logger.success(`${result.stack} deployed`);
+      results.success++;
+    } else {
+      logger.error(`${result.stack} failed: ${result.error}`);
       results.failed++;
     }
   }
 
-  // PHASE 3: Deploy Stage Stacks (can be parallel, but doing sequential for clarity)
+  // Check if any account stacks specifically failed
+  accountStacksFailed = accountResults.some(r => !r.success);
+  if (accountStacksFailed) {
+    logger.warn('Some Account stacks failed. Stage stacks may fail if their account OIDC provider did not deploy.');
+  }
+
+  // PHASE 3: Deploy Stage Stacks in parallel
   logger.newline();
-  logger.header('Phase 3: Stage Stacks');
+  logger.header('Phase 3: Stage Stacks (parallel)');
 
-  for (const stack of plan.stageStacks) {
-    const spinner = ora(`Deploying ${stack.stackName} to ${stack.accountId}/${stack.region}...`).start();
+  logger.info(`Deploying ${plan.stageStacks.length} stack(s) in parallel...`);
+  logger.newline();
 
+  // Create deployment promises for all stage stacks
+  const stagePromises = plan.stageStacks.map(async (stack) => {
     try {
       await deployStageStack(stack, authData, currentAccountId, options);
-      spinner.succeed(`${stack.stackName} deployed to ${stack.accountId}`);
-      results.success++;
+      return { stack: stack.stackName, success: true };
     } catch (error) {
-      spinner.fail(`${stack.stackName} failed: ${error instanceof Error ? error.message : String(error)}`);
+      return {
+        stack: stack.stackName,
+        success: false,
+        error: error instanceof Error ? error.message : String(error),
+      };
+    }
+  });
+
+  // Wait for all stage stacks to complete
+  const phase3Results = await Promise.all(stagePromises);
+
+  // Process phase 3 results
+  logger.newline();
+  for (const result of phase3Results) {
+    if (result.success) {
+      logger.success(`${result.stack} deployed`);
+      results.success++;
+    } else {
+      logger.error(`${result.stack} failed: ${result.error}`);
       results.failed++;
     }
   }
@@ -495,6 +606,43 @@ async function deployPipelineStack(
     accountId: cicdAccountId,
     region: cicdRegion,
     credentials,
+    showProgress: false, // Disable progress bar for parallel deployment
+  };
+
+  // Preview changes
+  await previewStackChanges(deployOptions);
+
+  // Deploy
+  await deployStack(deployOptions);
+}
+
+/**
+ * Deploy an account bootstrap stack (creates OIDC provider)
+ */
+async function deployAccountStack(
+  stack: AccountStackDeployment,
+  currentAccountId: string,
+  options: BootstrapOptions
+): Promise<void> {
+  // Get credentials for target account
+  const credentials = stack.accountId !== currentAccountId
+    ? (await assumeRoleForAccount({
+        targetAccountId: stack.accountId,
+        currentAccountId,
+        targetRoleName: options.targetAccountRoleName,
+      }))?.credentials
+    : undefined;
+
+  // Generate template
+  const template = generateAccountStackTemplate();
+
+  const deployOptions = {
+    stackName: stack.stackName,
+    template,
+    accountId: stack.accountId,
+    region: stack.region,
+    credentials,
+    showProgress: false, // Disable progress bar for parallel deployment
   };
 
   // Preview changes
@@ -522,9 +670,7 @@ async function deployStageStack(
       }))?.credentials
     : undefined;
 
-  // Check if OIDC provider exists
-  const oidcInfo = await checkOidcProviderExists(credentials, stack.region);
-  logger.verbose(`OIDC provider in ${stack.accountId}: ${oidcInfo.exists ? 'exists' : 'will be created'}`);
+  // Note: OIDC provider is created by the Account Bootstrap stack (deployed in Phase 2)
 
   // Generate template
   const template = generateStageStackTemplate({
@@ -544,6 +690,7 @@ async function deployStageStack(
     accountId: stack.accountId,
     region: stack.region,
     credentials,
+    showProgress: false, // Disable progress bar for parallel deployment
   };
 
   // Preview changes
