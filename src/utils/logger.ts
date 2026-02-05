@@ -7,54 +7,119 @@ import chalk from 'chalk';
 let verboseMode = false;
 
 /**
- * Progress bar for tracking deployment progress
+ * Resource status for tracking deployment progress
  */
-export class ProgressBar {
-  private current = 0;
-  private total = 0;
-  private label: string;
-  private barWidth = 30;
+export interface ResourceStatus {
+  logicalId: string;
+  resourceType: string;
+  status: 'in_progress' | 'complete' | 'failed';
+  reason?: string;
+}
+
+/**
+ * Stack status for multi-stack progress display
+ */
+export interface StackProgressState {
+  stackName: string;
+  accountId: string;
+  region: string;
+  completed: number;
+  total: number;
+  status: 'pending' | 'in_progress' | 'complete' | 'failed' | 'rollback';
+  latestEvent?: string;
+  latestResourceId?: string;
+}
+
+// Spinner frames for in-progress indication
+const SPINNER_FRAMES = ['⠋', '⠙', '⠹', '⠸', '⠼', '⠴', '⠦', '⠧', '⠇', '⠏'];
+
+/**
+ * Multi-stack progress display for parallel deployments
+ */
+export class MultiStackProgress {
+  private stacks: Map<string, StackProgressState> = new Map();
+  private stackOrder: string[] = [];
   private lastLineCount = 0;
-  private eventLines: string[] = [];
-  private maxVisibleEvents = 5;
+  private isTTY: boolean;
+  private spinnerFrame = 0;
+  private spinnerInterval: ReturnType<typeof setInterval> | null = null;
+  private barWidth = 20;
 
-  constructor(label: string, total: number) {
-    this.label = label;
-    this.total = total;
-    this.render();
-  }
-
-  /**
-   * Update progress and re-render
-   */
-  update(current: number, eventMessage?: string): void {
-    this.current = current;
-    if (eventMessage) {
-      this.eventLines.push(eventMessage);
-      // Keep only the most recent events
-      if (this.eventLines.length > this.maxVisibleEvents) {
-        this.eventLines.shift();
-      }
+  constructor() {
+    this.isTTY = process.stdout.isTTY ?? false;
+    if (this.isTTY) {
+      // Start spinner animation
+      this.spinnerInterval = setInterval(() => {
+        this.spinnerFrame = (this.spinnerFrame + 1) % SPINNER_FRAMES.length;
+        this.render();
+      }, 80);
     }
+  }
+
+  /**
+   * Register a stack to track
+   */
+  addStack(stackName: string, accountId: string, region: string, totalResources: number): void {
+    this.stacks.set(stackName, {
+      stackName,
+      accountId,
+      region,
+      completed: 0,
+      total: totalResources,
+      status: 'pending',
+    });
+    this.stackOrder.push(stackName);
     this.render();
   }
 
   /**
-   * Add an event message without changing progress
+   * Update a stack's progress
    */
-  addEvent(message: string): void {
-    this.eventLines.push(message);
-    if (this.eventLines.length > this.maxVisibleEvents) {
-      this.eventLines.shift();
+  updateStack(
+    stackName: string,
+    completed: number,
+    status: StackProgressState['status'],
+    latestEvent?: string,
+    latestResourceId?: string
+  ): void {
+    const stack = this.stacks.get(stackName);
+    if (stack) {
+      stack.completed = completed;
+      stack.status = status;
+      if (latestEvent) stack.latestEvent = latestEvent;
+      if (latestResourceId) stack.latestResourceId = latestResourceId;
+      this.render();
     }
-    this.render();
   }
 
   /**
-   * Clear the progress bar from the terminal
+   * Mark a stack as started
    */
-  clear(): void {
-    // Move up and clear all lines we've written
+  startStack(stackName: string): void {
+    const stack = this.stacks.get(stackName);
+    if (stack) {
+      stack.status = 'in_progress';
+      this.render();
+    }
+  }
+
+  /**
+   * Mark a stack as complete
+   */
+  completeStack(stackName: string, success: boolean): void {
+    const stack = this.stacks.get(stackName);
+    if (stack) {
+      stack.status = success ? 'complete' : 'failed';
+      stack.completed = success ? stack.total : stack.completed;
+      this.render();
+    }
+  }
+
+  /**
+   * Clear the display
+   */
+  private clear(): void {
+    if (!this.isTTY) return;
     for (let i = 0; i < this.lastLineCount; i++) {
       process.stdout.write('\x1b[A\x1b[2K');
     }
@@ -62,46 +127,125 @@ export class ProgressBar {
   }
 
   /**
-   * Finish and clear the progress bar
+   * Finish and stop updates
    */
   finish(): void {
+    if (this.spinnerInterval) {
+      clearInterval(this.spinnerInterval);
+      this.spinnerInterval = null;
+    }
     this.clear();
+    // Final render
+    this.renderFinal();
   }
 
   /**
-   * Render the progress bar
+   * Render final state (no clearing, just print)
+   */
+  private renderFinal(): void {
+    for (const stackName of this.stackOrder) {
+      const stack = this.stacks.get(stackName);
+      if (!stack) continue;
+      console.log(this.formatStackLine(stack, false));
+    }
+  }
+
+  /**
+   * Format a single stack line
+   */
+  private formatStackLine(stack: StackProgressState, withSpinner: boolean): string {
+    const { accountId, region, stackName, completed, total, status, latestEvent, latestResourceId } = stack;
+
+    // Status indicator
+    let statusIndicator: string;
+    let colorFn: (s: string) => string;
+
+    switch (status) {
+      case 'complete':
+        statusIndicator = '✔';
+        colorFn = chalk.green;
+        break;
+      case 'failed':
+      case 'rollback':
+        statusIndicator = '✖';
+        colorFn = chalk.red;
+        break;
+      case 'in_progress':
+        statusIndicator = withSpinner ? SPINNER_FRAMES[this.spinnerFrame] : '⋯';
+        colorFn = chalk.blue;
+        break;
+      default:
+        statusIndicator = '○';
+        colorFn = chalk.gray;
+    }
+
+    // Progress bar
+    const percentage = total > 0 ? completed / total : 0;
+    const filled = Math.round(this.barWidth * percentage);
+    const empty = this.barWidth - filled;
+    const bar = '█'.repeat(filled) + '░'.repeat(empty);
+
+    // Account/region label
+    const accountLabel = `[${accountId} - ${region}]`;
+
+    // Progress count
+    const countLabel = `(${completed}/${total})`;
+
+    // Latest event (truncate if needed)
+    let eventLabel = '';
+    if (latestEvent && latestResourceId) {
+      const maxEventLen = 30;
+      const resourceIdTrunc = latestResourceId.length > 20
+        ? latestResourceId.slice(0, 17) + '...'
+        : latestResourceId;
+      eventLabel = ` ${latestEvent} ${resourceIdTrunc}`;
+      if (eventLabel.length > maxEventLen) {
+        eventLabel = eventLabel.slice(0, maxEventLen - 3) + '...';
+      }
+    }
+
+    // Build the line
+    const line = `${statusIndicator} ${accountLabel} ${stackName} [${bar}] ${countLabel}${eventLabel}`;
+    return colorFn(line);
+  }
+
+  /**
+   * Render all stack progress bars
    */
   private render(): void {
-    // Clear previous output
+    if (!this.isTTY) return;
+
     this.clear();
 
     const lines: string[] = [];
-
-    // Add event lines
-    for (const event of this.eventLines) {
-      lines.push(event);
+    for (const stackName of this.stackOrder) {
+      const stack = this.stacks.get(stackName);
+      if (!stack) continue;
+      lines.push(this.formatStackLine(stack, true));
     }
-
-    // Build progress bar
-    const percentage = this.total > 0 ? this.current / this.total : 0;
-    const filled = Math.round(this.barWidth * percentage);
-    const empty = this.barWidth - filled;
-
-    const bar = chalk.green('█'.repeat(filled)) + chalk.gray('░'.repeat(empty));
-    const count = chalk.cyan(`${this.current}/${this.total}`);
-    const labelText = chalk.bold(this.label);
-
-    lines.push(`${labelText} ${bar} ${count} resources`);
-
-    // Add empty line for bottom buffer
-    lines.push('');
 
     // Write all lines
     for (const line of lines) {
       process.stdout.write(line + '\n');
     }
-
     this.lastLineCount = lines.length;
+  }
+}
+
+// Global multi-stack progress instance
+let globalProgress: MultiStackProgress | null = null;
+
+export function getMultiStackProgress(): MultiStackProgress {
+  if (!globalProgress) {
+    globalProgress = new MultiStackProgress();
+  }
+  return globalProgress;
+}
+
+export function clearMultiStackProgress(): void {
+  if (globalProgress) {
+    globalProgress.finish();
+    globalProgress = null;
   }
 }
 

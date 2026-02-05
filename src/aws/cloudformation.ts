@@ -16,12 +16,11 @@ import {
   ChangeSetType,
   type DescribeStacksOutput,
   type Change,
-  type StackEvent,
 } from '@aws-sdk/client-cloudformation';
 import type { AwsCredentialIdentity } from '@aws-sdk/types';
 import { CloudFormationError } from '../utils/errors.js';
 import * as logger from '../utils/logger.js';
-import { ProgressBar } from '../utils/logger.js';
+import { getMultiStackProgress } from '../utils/logger.js';
 import type { StackStatus, CloudFormationTemplate } from '../types/aws.js';
 import type { CloudFormationStackResources } from '../merge/strategy.js';
 
@@ -31,8 +30,6 @@ export interface DeployStackOptions {
   accountId: string;
   region?: string;
   credentials?: AwsCredentialIdentity;
-  /** Set to false to disable progress bar (recommended for parallel deployments) */
-  showProgress?: boolean;
 }
 
 export async function getStackStatus(
@@ -91,7 +88,7 @@ export async function previewStackChanges(options: DeployStackOptions): Promise<
   // Skip preview for new stacks - creating a change set with ChangeSetType.CREATE
   // puts the stack into REVIEW_IN_PROGRESS status, which blocks subsequent deployments
   if (!stackStatus.exists) {
-    logger.info(`  Stack ${stackName} will be created (new stack)`);
+    logger.info(`  Stack ${stackName} will be created (new stack) in account ${options.accountId} (${region || 'default region'})`);
     return;
   }
 
@@ -122,7 +119,7 @@ export async function previewStackChanges(options: DeployStackOptions): Promise<
     );
 
     // Log the changes
-    logStackChanges(stackName, changeSetResponse.Changes || [], stackStatus.exists);
+    logStackChanges(stackName, changeSetResponse.Changes || [], stackStatus.exists, options.accountId, region);
 
     // Delete the change set (we just wanted to preview)
     await client.send(
@@ -161,14 +158,14 @@ export async function previewStackChanges(options: DeployStackOptions): Promise<
 /**
  * Log the changes from a change set in a readable format
  */
-function logStackChanges(stackName: string, changes: Change[], isUpdate: boolean): void {
+function logStackChanges(stackName: string, changes: Change[], isUpdate: boolean, accountId: string, region?: string): void {
   if (changes.length === 0) {
     logger.verbose(`  Stack ${stackName}: No changes`);
     return;
   }
 
   const action = isUpdate ? 'update' : 'create';
-  logger.info(`  Stack ${stackName} will ${action} ${changes.length} resource(s):`);
+  logger.info(`  Stack ${stackName} will ${action} ${changes.length} resource(s) in account ${accountId} (${region || 'default region'}):`);
 
   for (const change of changes) {
     const resourceChange = change.ResourceChange;
@@ -225,30 +222,6 @@ const SUCCESS_STATES = new Set([
 ]);
 
 /**
- * Get a symbol and color hint for resource status
- */
-function getStatusSymbol(status: string | undefined): string {
-  if (!status) return '?';
-  if (status.includes('COMPLETE') && !status.includes('ROLLBACK')) return '✔';
-  if (status.includes('FAILED') || status.includes('ROLLBACK')) return '✖';
-  if (status.includes('IN_PROGRESS')) return '⋯';
-  return '?';
-}
-
-/**
- * Format a stack event for display
- */
-function formatStackEvent(event: StackEvent): string {
-  const symbol = getStatusSymbol(event.ResourceStatus);
-  const resourceType = event.ResourceType || 'Unknown';
-  const logicalId = event.LogicalResourceId || 'Unknown';
-  const status = event.ResourceStatus || 'Unknown';
-  const reason = event.ResourceStatusReason ? ` - ${event.ResourceStatusReason}` : '';
-
-  return `  ${symbol} ${resourceType} (${logicalId}): ${status}${reason}`;
-}
-
-/**
  * Check if a resource status indicates completion (not rollback)
  */
 function isResourceComplete(status: string | undefined): boolean {
@@ -257,23 +230,23 @@ function isResourceComplete(status: string | undefined): boolean {
 }
 
 /**
- * Wait for a stack operation to complete while showing progress
+ * Wait for a stack operation to complete while updating multi-stack progress
  */
 async function waitForStackWithProgress(
   client: CloudFormationClient,
   stackName: string,
   operationStartTime: Date,
   totalResources: number,
-  maxWaitTime: number = 600,
-  showProgress: boolean = true
+  maxWaitTime: number = 600
 ): Promise<void> {
   const seenEventIds = new Set<string>();
   const completedResources = new Set<string>();
   const startTime = Date.now();
   const pollInterval = 3000; // Poll every 3 seconds
 
-  // Create progress bar only if showProgress is enabled
-  const progressBar = showProgress ? new ProgressBar(stackName, totalResources) : null;
+  const progress = getMultiStackProgress();
+  let latestEvent = '';
+  let latestResourceId = '';
 
   try {
     while (true) {
@@ -312,25 +285,38 @@ async function waitForStackWithProgress(
           seenEventIds.add(event.EventId);
         }
 
-        // Track completed resources (exclude the stack itself)
         const logicalId = event.LogicalResourceId;
-        if (logicalId && logicalId !== stackName && isResourceComplete(event.ResourceStatus)) {
-          completedResources.add(logicalId);
-        }
+        const status = event.ResourceStatus || '';
 
-        // Update progress bar with event (or log if no progress bar)
-        if (progressBar) {
-          progressBar.update(completedResources.size, formatStackEvent(event));
+        // Skip the stack itself
+        if (logicalId && logicalId !== stackName) {
+          // Update latest event for display
+          latestEvent = status;
+          latestResourceId = logicalId;
+
+          if (isResourceComplete(status)) {
+            completedResources.add(logicalId);
+          }
         }
       }
 
-      // Check if we've reached a terminal state
+      // Determine stack status for display
       const currentStatus = stack.StackStatus || '';
+      let displayStatus: 'pending' | 'in_progress' | 'complete' | 'failed' | 'rollback' = 'in_progress';
+      if (currentStatus.includes('ROLLBACK')) {
+        displayStatus = 'rollback';
+      } else if (currentStatus.includes('FAILED')) {
+        displayStatus = 'failed';
+      }
+
+      // Update progress display
+      progress.updateStack(stackName, completedResources.size, displayStatus, latestEvent, latestResourceId);
+
+      // Check if we've reached a terminal state
       if (TERMINAL_STATES.has(currentStatus)) {
-        if (progressBar) {
-          progressBar.finish();
-        }
-        if (SUCCESS_STATES.has(currentStatus)) {
+        const success = SUCCESS_STATES.has(currentStatus);
+        progress.completeStack(stackName, success);
+        if (success) {
           return; // Success!
         }
         // Any terminal state that isn't SUCCESS is a failure
@@ -341,15 +327,13 @@ async function waitForStackWithProgress(
       await new Promise(resolve => setTimeout(resolve, pollInterval));
     }
   } catch (error) {
-    if (progressBar) {
-      progressBar.finish();
-    }
+    progress.completeStack(stackName, false);
     throw error;
   }
 }
 
 export async function deployStack(options: DeployStackOptions): Promise<void> {
-  const { stackName, template, accountId, region, credentials, showProgress = true } = options;
+  const { stackName, template, accountId, region, credentials } = options;
 
   const client = new CloudFormationClient({
     credentials,
@@ -359,15 +343,19 @@ export async function deployStack(options: DeployStackOptions): Promise<void> {
   const templateBody = JSON.stringify(template);
   const resourceCount = Object.keys(template.Resources || {}).length;
 
+  // Mark stack as started in progress display
+  const progress = getMultiStackProgress();
+  progress.startStack(stackName);
+
   try {
     const stackStatus = await getStackStatus(stackName, credentials, region);
 
     if (stackStatus.exists) {
       logger.verbose(`Stack ${stackName} exists, updating...`);
-      await updateStack(client, stackName, templateBody, accountId, resourceCount, showProgress);
+      await updateStack(client, stackName, templateBody, accountId, resourceCount);
     } else {
       logger.verbose(`Stack ${stackName} does not exist, creating...`);
-      await createStack(client, stackName, templateBody, accountId, resourceCount, showProgress);
+      await createStack(client, stackName, templateBody, accountId, resourceCount);
     }
   } catch (error) {
     const errorMessage = error instanceof Error ? error.message : String(error);
@@ -375,9 +363,11 @@ export async function deployStack(options: DeployStackOptions): Promise<void> {
     // "No updates are to be performed" is not an error
     if (errorMessage.includes('No updates are to be performed')) {
       logger.verbose(`Stack ${stackName} is already up to date`);
+      progress.completeStack(stackName, true);
       return;
     }
 
+    progress.completeStack(stackName, false);
     throw new CloudFormationError(stackName, accountId, errorMessage);
   }
 }
@@ -386,9 +376,8 @@ async function createStack(
   client: CloudFormationClient,
   stackName: string,
   templateBody: string,
-  accountId: string,
-  resourceCount: number,
-  showProgress: boolean = true
+  _accountId: string,
+  resourceCount: number
 ): Promise<void> {
   const operationStartTime = new Date();
 
@@ -404,20 +393,15 @@ async function createStack(
     })
   );
 
-  logger.info(`Creating stack ${stackName}...`);
-
-  await waitForStackWithProgress(client, stackName, operationStartTime, resourceCount, 600, showProgress);
-
-  logger.success(`Stack ${stackName} created successfully in account ${accountId}`);
+  await waitForStackWithProgress(client, stackName, operationStartTime, resourceCount);
 }
 
 async function updateStack(
   client: CloudFormationClient,
   stackName: string,
   templateBody: string,
-  accountId: string,
-  resourceCount: number,
-  showProgress: boolean = true
+  _accountId: string,
+  resourceCount: number
 ): Promise<void> {
   const operationStartTime = new Date();
 
@@ -429,11 +413,7 @@ async function updateStack(
     })
   );
 
-  logger.info(`Updating stack ${stackName}...`);
-
-  await waitForStackWithProgress(client, stackName, operationStartTime, resourceCount, 600, showProgress);
-
-  logger.success(`Stack ${stackName} updated successfully in account ${accountId}`);
+  await waitForStackWithProgress(client, stackName, operationStartTime, resourceCount);
 }
 
 /**
