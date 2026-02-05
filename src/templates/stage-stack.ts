@@ -3,9 +3,10 @@
  *
  * Creates the stage-level stack deployed to each stage's account/region.
  * Contains:
- * - OIDC Provider (if not exists in account)
  * - Stage deployment role with permissions for pipeline steps
  * - Mirrored ECR repos and S3 buckets for all artifacts
+ *
+ * Note: OIDC provider is created by the Account Bootstrap stack (once per account)
  */
 
 import type { CloudFormationTemplate } from '../types/aws.js';
@@ -14,14 +15,13 @@ import type { DockerArtifact, BundleArtifact } from '../types/artifacts.js';
 import { getStepPermissions, hasPermissions } from '../permissions/index.js';
 import {
   createBaseTemplate,
-  addOidcProviderResource,
   buildOidcTrustPolicy,
   createIamRoleResource,
   createS3BucketResource,
   createEcrRepositoryResource,
   sanitizeResourceId,
-  getOidcProviderArn,
 } from './common.js';
+import { OIDC_PROVIDER_URL } from '../types/config.js';
 import {
   getStageStackName,
   generateStageRoleName,
@@ -64,10 +64,9 @@ export function generateStageStackTemplate(options: StageStackOptions): CloudFor
     `DevRamps Stage Stack for ${pipelineSlug}/${stageName}`
   );
 
-  // 1. OIDC Provider (conditional)
-  addOidcProviderResource(template, true);
+  // Note: OIDC provider is created by the Account Bootstrap stack (once per account)
 
-  // 2. Stage deployment role
+  // 1. Stage deployment role
   const roleName = generateStageRoleName(pipelineSlug, stageName);
   const trustPolicy = buildStageTrustPolicy(accountId, orgSlug, pipelineSlug, stageName);
   const policies = buildStagePolicies(steps, additionalPolicies);
@@ -126,6 +125,9 @@ export function generateStageStackTemplate(options: StageStackOptions): CloudFor
   }
 
   // Outputs
+  // Note: OIDC provider ARN is constructed manually (provider created by Account Bootstrap stack)
+  const oidcProviderArn = `arn:aws:iam::${accountId}:oidc-provider/${OIDC_PROVIDER_URL}`;
+
   template.Outputs = {
     StageRoleArn: {
       Description: 'ARN of the stage deployment role',
@@ -137,8 +139,8 @@ export function generateStageStackTemplate(options: StageStackOptions): CloudFor
       Value: { Ref: 'StageDeploymentRole' },
     },
     OIDCProviderArn: {
-      Description: 'ARN of the OIDC provider',
-      Value: getOidcProviderArn(accountId, true),
+      Description: 'ARN of the OIDC provider (created by Account Bootstrap stack)',
+      Value: oidcProviderArn,
     },
     PipelineSlug: {
       Description: 'Pipeline slug',

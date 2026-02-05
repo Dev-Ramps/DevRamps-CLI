@@ -11,6 +11,7 @@ import type { DockerArtifact, BundleArtifact } from './artifacts.js';
 export enum StackType {
   ORG = 'Org',
   PIPELINE = 'Pipeline',
+  ACCOUNT = 'Account',
   STAGE = 'Stage',
 }
 
@@ -47,6 +48,14 @@ export interface PipelineStackDeployment extends BaseStackDeployment {
 }
 
 /**
+ * Account Stack - deployed once per account to create the OIDC provider
+ * Contains: OIDC provider only (must be unique per account)
+ */
+export interface AccountStackDeployment extends BaseStackDeployment {
+  stackType: StackType.ACCOUNT;
+}
+
+/**
  * Stage Stack - deployed once per stage in the stage's account/region
  * Contains: Stage deployment role, mirrored ECR repos and S3 buckets
  */
@@ -65,10 +74,10 @@ export interface StageStackDeployment extends BaseStackDeployment {
   bundleArtifacts: BundleArtifact[];
 }
 
-export type StackDeployment = OrgStackDeployment | PipelineStackDeployment | StageStackDeployment;
+export type StackDeployment = OrgStackDeployment | PipelineStackDeployment | AccountStackDeployment | StageStackDeployment;
 
 /**
- * Complete deployment plan containing all three stack types
+ * Complete deployment plan containing all stack types
  */
 export interface DeploymentPlan {
   orgSlug: string;
@@ -76,6 +85,8 @@ export interface DeploymentPlan {
   cicdRegion: string;
   orgStack: OrgStackDeployment;
   pipelineStacks: PipelineStackDeployment[];
+  /** Account stacks - one per unique target account for OIDC provider */
+  accountStacks: AccountStackDeployment[];
   stageStacks: StageStackDeployment[];
 }
 
@@ -88,6 +99,10 @@ export function isOrgStack(stack: StackDeployment): stack is OrgStackDeployment 
 
 export function isPipelineStack(stack: StackDeployment): stack is PipelineStackDeployment {
   return stack.stackType === StackType.PIPELINE;
+}
+
+export function isAccountStack(stack: StackDeployment): stack is AccountStackDeployment {
+  return stack.stackType === StackType.ACCOUNT;
 }
 
 export function isStageStack(stack: StackDeployment): stack is StageStackDeployment {

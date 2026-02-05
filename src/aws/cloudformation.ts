@@ -6,21 +6,22 @@ import {
   CloudFormationClient,
   DescribeStacksCommand,
   DescribeStackResourcesCommand,
+  DescribeStackEventsCommand,
   CreateStackCommand,
   UpdateStackCommand,
   CreateChangeSetCommand,
   DescribeChangeSetCommand,
   DeleteChangeSetCommand,
-  waitUntilStackCreateComplete,
-  waitUntilStackUpdateComplete,
   waitUntilChangeSetCreateComplete,
   ChangeSetType,
   type DescribeStacksOutput,
   type Change,
+  type StackEvent,
 } from '@aws-sdk/client-cloudformation';
 import type { AwsCredentialIdentity } from '@aws-sdk/types';
 import { CloudFormationError } from '../utils/errors.js';
 import * as logger from '../utils/logger.js';
+import { ProgressBar } from '../utils/logger.js';
 import type { StackStatus, CloudFormationTemplate } from '../types/aws.js';
 import type { CloudFormationStackResources } from '../merge/strategy.js';
 
@@ -200,6 +201,144 @@ function getActionSymbol(action: string | undefined): string {
   }
 }
 
+/**
+ * Terminal status states for CloudFormation stacks
+ */
+const TERMINAL_STATES = new Set([
+  'CREATE_COMPLETE',
+  'CREATE_FAILED',
+  'DELETE_COMPLETE',
+  'DELETE_FAILED',
+  'ROLLBACK_COMPLETE',
+  'ROLLBACK_FAILED',
+  'UPDATE_COMPLETE',
+  'UPDATE_FAILED',
+  'UPDATE_ROLLBACK_COMPLETE',
+  'UPDATE_ROLLBACK_FAILED',
+]);
+
+const SUCCESS_STATES = new Set([
+  'CREATE_COMPLETE',
+  'UPDATE_COMPLETE',
+]);
+
+/**
+ * Get a symbol and color hint for resource status
+ */
+function getStatusSymbol(status: string | undefined): string {
+  if (!status) return '?';
+  if (status.includes('COMPLETE') && !status.includes('ROLLBACK')) return '✔';
+  if (status.includes('FAILED') || status.includes('ROLLBACK')) return '✖';
+  if (status.includes('IN_PROGRESS')) return '⋯';
+  return '?';
+}
+
+/**
+ * Format a stack event for display
+ */
+function formatStackEvent(event: StackEvent): string {
+  const symbol = getStatusSymbol(event.ResourceStatus);
+  const resourceType = event.ResourceType || 'Unknown';
+  const logicalId = event.LogicalResourceId || 'Unknown';
+  const status = event.ResourceStatus || 'Unknown';
+  const reason = event.ResourceStatusReason ? ` - ${event.ResourceStatusReason}` : '';
+
+  return `  ${symbol} ${resourceType} (${logicalId}): ${status}${reason}`;
+}
+
+/**
+ * Check if a resource status indicates completion (not rollback)
+ */
+function isResourceComplete(status: string | undefined): boolean {
+  if (!status) return false;
+  return status.includes('_COMPLETE') && !status.includes('ROLLBACK');
+}
+
+/**
+ * Wait for a stack operation to complete while showing progress
+ */
+async function waitForStackWithProgress(
+  client: CloudFormationClient,
+  stackName: string,
+  operationStartTime: Date,
+  totalResources: number,
+  maxWaitTime: number = 600
+): Promise<void> {
+  const seenEventIds = new Set<string>();
+  const completedResources = new Set<string>();
+  const startTime = Date.now();
+  const pollInterval = 3000; // Poll every 3 seconds
+
+  // Create progress bar
+  const progressBar = new ProgressBar(stackName, totalResources);
+
+  try {
+    while (true) {
+      // Check if we've exceeded max wait time
+      if (Date.now() - startTime > maxWaitTime * 1000) {
+        throw new Error(`Stack operation timed out after ${maxWaitTime} seconds`);
+      }
+
+      // Get current stack status
+      const stackResponse = await client.send(
+        new DescribeStacksCommand({ StackName: stackName })
+      );
+      const stack = stackResponse.Stacks?.[0];
+      if (!stack) {
+        throw new Error(`Stack ${stackName} not found`);
+      }
+
+      // Get stack events
+      const eventsResponse = await client.send(
+        new DescribeStackEventsCommand({ StackName: stackName })
+      );
+
+      // Filter and display new events (in chronological order)
+      const newEvents = (eventsResponse.StackEvents || [])
+        .filter(event => {
+          // Only show events from after the operation started
+          if (!event.Timestamp || event.Timestamp < operationStartTime) return false;
+          // Only show events we haven't seen
+          if (!event.EventId || seenEventIds.has(event.EventId)) return false;
+          return true;
+        })
+        .reverse(); // Show oldest first
+
+      for (const event of newEvents) {
+        if (event.EventId) {
+          seenEventIds.add(event.EventId);
+        }
+
+        // Track completed resources (exclude the stack itself)
+        const logicalId = event.LogicalResourceId;
+        if (logicalId && logicalId !== stackName && isResourceComplete(event.ResourceStatus)) {
+          completedResources.add(logicalId);
+        }
+
+        // Update progress bar with event
+        progressBar.update(completedResources.size, formatStackEvent(event));
+      }
+
+      // Check if we've reached a terminal state
+      const currentStatus = stack.StackStatus || '';
+      if (TERMINAL_STATES.has(currentStatus)) {
+        progressBar.finish();
+        if (SUCCESS_STATES.has(currentStatus)) {
+          return; // Success!
+        }
+        // Any terminal state that isn't SUCCESS is a failure
+        throw new Error(`Stack operation failed with status: ${currentStatus}`);
+      }
+
+      // Wait before polling again
+      await new Promise(resolve => setTimeout(resolve, pollInterval));
+    }
+  } catch (error) {
+    progressBar.finish();
+    throw error;
+  }
+}
+
 export async function deployStack(options: DeployStackOptions): Promise<void> {
   const { stackName, template, accountId, region, credentials } = options;
 
@@ -209,16 +348,17 @@ export async function deployStack(options: DeployStackOptions): Promise<void> {
   });
 
   const templateBody = JSON.stringify(template);
+  const resourceCount = Object.keys(template.Resources || {}).length;
 
   try {
     const stackStatus = await getStackStatus(stackName, credentials, region);
 
     if (stackStatus.exists) {
       logger.verbose(`Stack ${stackName} exists, updating...`);
-      await updateStack(client, stackName, templateBody, accountId);
+      await updateStack(client, stackName, templateBody, accountId, resourceCount);
     } else {
       logger.verbose(`Stack ${stackName} does not exist, creating...`);
-      await createStack(client, stackName, templateBody, accountId);
+      await createStack(client, stackName, templateBody, accountId, resourceCount);
     }
   } catch (error) {
     const errorMessage = error instanceof Error ? error.message : String(error);
@@ -237,8 +377,11 @@ async function createStack(
   client: CloudFormationClient,
   stackName: string,
   templateBody: string,
-  accountId: string
+  accountId: string,
+  resourceCount: number
 ): Promise<void> {
+  const operationStartTime = new Date();
+
   await client.send(
     new CreateStackCommand({
       StackName: stackName,
@@ -251,12 +394,9 @@ async function createStack(
     })
   );
 
-  logger.verbose(`Waiting for stack ${stackName} to be created...`);
+  logger.info(`Creating stack ${stackName}...`);
 
-  await waitUntilStackCreateComplete(
-    { client, maxWaitTime: 600 },
-    { StackName: stackName }
-  );
+  await waitForStackWithProgress(client, stackName, operationStartTime, resourceCount, 600);
 
   logger.success(`Stack ${stackName} created successfully in account ${accountId}`);
 }
@@ -265,8 +405,11 @@ async function updateStack(
   client: CloudFormationClient,
   stackName: string,
   templateBody: string,
-  accountId: string
+  accountId: string,
+  resourceCount: number
 ): Promise<void> {
+  const operationStartTime = new Date();
+
   await client.send(
     new UpdateStackCommand({
       StackName: stackName,
@@ -275,12 +418,9 @@ async function updateStack(
     })
   );
 
-  logger.verbose(`Waiting for stack ${stackName} to be updated...`);
+  logger.info(`Updating stack ${stackName}...`);
 
-  await waitUntilStackUpdateComplete(
-    { client, maxWaitTime: 600 },
-    { StackName: stackName }
-  );
+  await waitForStackWithProgress(client, stackName, operationStartTime, resourceCount, 600);
 
   logger.success(`Stack ${stackName} updated successfully in account ${accountId}`);
 }

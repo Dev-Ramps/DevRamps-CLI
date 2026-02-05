@@ -184,6 +184,15 @@ export function getStageStackName(pipelineSlug: string, stageName: string): stri
   return truncateName(`DevRamps-${pipelineSlug}-${stageName}-Stage`, CF_STACK_MAX_LENGTH);
 }
 
+/**
+ * Generate account bootstrap stack name
+ * Format: DevRamps-Account-Bootstrap
+ * This stack is deployed once per account to create the OIDC provider
+ */
+export function getAccountStackName(): string {
+  return 'DevRamps-Account-Bootstrap';
+}
+
 // ============================================================================
 // KMS Key Names
 // ============================================================================
