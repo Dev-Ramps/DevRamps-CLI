@@ -30,17 +30,20 @@ export class NoCredentialsError extends DevRampsError {
 }
 
 export class RoleAssumptionError extends DevRampsError {
-  accountId: string;
+  targetAccountId: string;
+  sourceAccountId: string;
   roleName: string;
 
-  constructor(accountId: string, roleName: string) {
+  constructor(targetAccountId: string, roleName: string, sourceAccountId: string) {
     super(
-      `Cannot bootstrap account ${accountId}. Unable to assume role '${roleName}' in that account. ` +
-      'Please ensure your current credentials have permission to assume this role, ' +
+      `Cannot bootstrap account ${targetAccountId}. ` +
+      `Your current credentials (account ${sourceAccountId}) cannot assume role '${roleName}' in the target account. ` +
+      'Please ensure the target account has a trust policy allowing your account to assume this role, ' +
       'or use --target-account-role-name to specify a different role.'
     );
     this.name = 'RoleAssumptionError';
-    this.accountId = accountId;
+    this.targetAccountId = targetAccountId;
+    this.sourceAccountId = sourceAccountId;
     this.roleName = roleName;
   }
 }

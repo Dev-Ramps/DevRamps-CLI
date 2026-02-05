@@ -8,9 +8,15 @@ import {
   DescribeStackResourcesCommand,
   CreateStackCommand,
   UpdateStackCommand,
+  CreateChangeSetCommand,
+  DescribeChangeSetCommand,
+  DeleteChangeSetCommand,
   waitUntilStackCreateComplete,
   waitUntilStackUpdateComplete,
+  waitUntilChangeSetCreateComplete,
+  ChangeSetType,
   type DescribeStacksOutput,
+  type Change,
 } from '@aws-sdk/client-cloudformation';
 import type { AwsCredentialIdentity } from '@aws-sdk/types';
 import { CloudFormationError } from '../utils/errors.js';
@@ -60,6 +66,129 @@ export async function getStackStatus(
     }
 
     throw error;
+  }
+}
+
+/**
+ * Preview what changes will be made to a stack by creating and describing a change set
+ */
+export async function previewStackChanges(options: DeployStackOptions): Promise<void> {
+  const { stackName, template, region, credentials } = options;
+
+  const client = new CloudFormationClient({
+    credentials,
+    region,
+  });
+
+  const templateBody = JSON.stringify(template);
+  const stackStatus = await getStackStatus(stackName, credentials, region);
+  const changeSetName = `devramps-preview-${Date.now()}`;
+
+  try {
+    // Create a change set to preview changes
+    await client.send(
+      new CreateChangeSetCommand({
+        StackName: stackName,
+        ChangeSetName: changeSetName,
+        TemplateBody: templateBody,
+        Capabilities: ['CAPABILITY_NAMED_IAM'],
+        ChangeSetType: stackStatus.exists ? ChangeSetType.UPDATE : ChangeSetType.CREATE,
+      })
+    );
+
+    // Wait for change set to be created
+    await waitUntilChangeSetCreateComplete(
+      { client, maxWaitTime: 120 },
+      { StackName: stackName, ChangeSetName: changeSetName }
+    );
+
+    // Describe the change set to get the changes
+    const changeSetResponse = await client.send(
+      new DescribeChangeSetCommand({
+        StackName: stackName,
+        ChangeSetName: changeSetName,
+      })
+    );
+
+    // Log the changes
+    logStackChanges(stackName, changeSetResponse.Changes || [], stackStatus.exists);
+
+    // Delete the change set (we just wanted to preview)
+    await client.send(
+      new DeleteChangeSetCommand({
+        StackName: stackName,
+        ChangeSetName: changeSetName,
+      })
+    );
+  } catch (error) {
+    const errorMessage = error instanceof Error ? error.message : String(error);
+
+    // "No updates are to be performed" means no changes
+    if (errorMessage.includes('No updates are to be performed') ||
+        errorMessage.includes("didn't contain changes")) {
+      logger.verbose(`  Stack ${stackName}: No changes`);
+      return;
+    }
+
+    // Try to clean up the change set if it exists
+    try {
+      await client.send(
+        new DeleteChangeSetCommand({
+          StackName: stackName,
+          ChangeSetName: changeSetName,
+        })
+      );
+    } catch {
+      // Ignore cleanup errors
+    }
+
+    // For preview, we don't want to throw - just log the issue
+    logger.verbose(`  Could not preview changes for ${stackName}: ${errorMessage}`);
+  }
+}
+
+/**
+ * Log the changes from a change set in a readable format
+ */
+function logStackChanges(stackName: string, changes: Change[], isUpdate: boolean): void {
+  if (changes.length === 0) {
+    logger.verbose(`  Stack ${stackName}: No changes`);
+    return;
+  }
+
+  const action = isUpdate ? 'update' : 'create';
+  logger.info(`  Stack ${stackName} will ${action} ${changes.length} resource(s):`);
+
+  for (const change of changes) {
+    const resourceChange = change.ResourceChange;
+    if (!resourceChange) continue;
+
+    const actionSymbol = getActionSymbol(resourceChange.Action);
+    const resourceType = resourceChange.ResourceType || 'Unknown';
+    const logicalId = resourceChange.LogicalResourceId || 'Unknown';
+    const replacement = resourceChange.Replacement === 'True' ? ' (REPLACEMENT)' : '';
+
+    logger.info(`    ${actionSymbol} ${resourceType} ${logicalId}${replacement}`);
+  }
+}
+
+/**
+ * Get a symbol for the change action
+ */
+function getActionSymbol(action: string | undefined): string {
+  switch (action) {
+    case 'Add':
+      return '+';
+    case 'Modify':
+      return '~';
+    case 'Remove':
+      return '-';
+    case 'Import':
+      return '>';
+    case 'Dynamic':
+      return '?';
+    default:
+      return ' ';
   }
 }
 

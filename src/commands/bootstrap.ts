@@ -10,7 +10,7 @@
 import ora from 'ora';
 import { getCurrentIdentity } from '../aws/credentials.js';
 import { assumeRoleForAccount } from '../aws/assume-role.js';
-import { deployStack, getStackStatus, readExistingStack } from '../aws/cloudformation.js';
+import { deployStack, getStackStatus, readExistingStack, previewStackChanges } from '../aws/cloudformation.js';
 import { checkOidcProviderExists } from '../aws/oidc-provider.js';
 import { authenticateViaBrowser } from '../auth/browser-auth.js';
 import { findDevrampsPipelines, parsePipeline } from '../parsers/pipeline.js';
@@ -446,14 +446,19 @@ async function deployOrgStack(
     targetAccountIds,
   });
 
-  // Deploy
-  await deployStack({
+  const deployOptions = {
     stackName: plan.orgStack.stackName,
     template,
     accountId: cicdAccountId,
     region: cicdRegion,
     credentials,
-  });
+  };
+
+  // Preview changes
+  await previewStackChanges(deployOptions);
+
+  // Deploy
+  await deployStack(deployOptions);
 }
 
 /**
@@ -484,14 +489,19 @@ async function deployPipelineStack(
     bundleArtifacts: stack.bundleArtifacts,
   });
 
-  // Deploy
-  await deployStack({
+  const deployOptions = {
     stackName: stack.stackName,
     template,
     accountId: cicdAccountId,
     region: cicdRegion,
     credentials,
-  });
+  };
+
+  // Preview changes
+  await previewStackChanges(deployOptions);
+
+  // Deploy
+  await deployStack(deployOptions);
 }
 
 /**
@@ -528,12 +538,17 @@ async function deployStageStack(
     bundleArtifacts: stack.bundleArtifacts,
   });
 
-  // Deploy
-  await deployStack({
+  const deployOptions = {
     stackName: stack.stackName,
     template,
     accountId: stack.accountId,
     region: stack.region,
     credentials,
-  });
+  };
+
+  // Preview changes
+  await previewStackChanges(deployOptions);
+
+  // Deploy
+  await deployStack(deployOptions);
 }
