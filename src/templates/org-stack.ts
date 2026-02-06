@@ -3,23 +3,23 @@
  *
  * Creates the organization-level stack deployed to the CI/CD account.
  * Contains:
- * - OIDC Provider for DevRamps
  * - DevRamps-CICD-DeploymentRole (org-wide orchestration role)
  * - KMS Key for artifact encryption
  * - Terraform state S3 bucket with merged bucket policy
+ *
+ * Note: The OIDC provider is created by the Account Bootstrap stack,
+ * not the Org stack. The CI/CD account must be included in account bootstrapping.
  */
 
 import type { CloudFormationTemplate } from '../types/aws.js';
 import {
   createBaseTemplate,
-  addOidcProviderResource,
   buildOidcTrustPolicy,
   createIamRoleResource,
   createS3BucketResource,
   createKmsKeyResource,
   createKmsKeyAliasResource,
   STANDARD_TAGS,
-  getOidcProviderArn,
 } from './common.js';
 import {
   getOrgStackName,
@@ -44,10 +44,7 @@ export function generateOrgStackTemplate(options: OrgStackOptions): CloudFormati
 
   const template = createBaseTemplate(`DevRamps Org Stack for ${orgSlug}`);
 
-  // 1. OIDC Provider (conditional)
-  addOidcProviderResource(template, true);
-
-  // 2. KMS Key for encryption
+  // 1. KMS Key for encryption
   const kmsKeyPolicy = buildKmsKeyPolicy(cicdAccountId, targetAccountIds);
   template.Resources.DevRampsKMSKey = createKmsKeyResource(
     `DevRamps encryption key for org: ${orgSlug}`,
@@ -60,7 +57,7 @@ export function generateOrgStackTemplate(options: OrgStackOptions): CloudFormati
     'DevRampsKMSKey'
   );
 
-  // 3. Terraform state S3 bucket
+  // 2. Terraform state S3 bucket
   const bucketName = generateTerraformStateBucketName(orgSlug);
   template.Resources.TerraformStateBucket = createS3BucketResource(
     bucketName,
@@ -68,7 +65,7 @@ export function generateOrgStackTemplate(options: OrgStackOptions): CloudFormati
     { kmsKeyArn: { 'Fn::GetAtt': ['DevRampsKMSKey', 'Arn'] } }
   );
 
-  // 4. Terraform state bucket policy
+  // 3. Terraform state bucket policy
   const bucketPolicy = createTerraformStateBucketPolicy(
     bucketName,
     cicdAccountId,
@@ -83,7 +80,7 @@ export function generateOrgStackTemplate(options: OrgStackOptions): CloudFormati
     },
   };
 
-  // 5. DevRamps-CICD-DeploymentRole (org-wide orchestration)
+  // 4. DevRamps-CICD-DeploymentRole (org-wide orchestration)
   const trustPolicy = buildOidcTrustPolicy(cicdAccountId, `org:${orgSlug}`);
   const orgRolePolicies = buildOrgRolePolicies(orgSlug);
 
@@ -122,10 +119,6 @@ export function generateOrgStackTemplate(options: OrgStackOptions): CloudFormati
     TerraformStateBucketArn: {
       Description: 'ARN of the Terraform state bucket',
       Value: { 'Fn::GetAtt': ['TerraformStateBucket', 'Arn'] },
-    },
-    OIDCProviderArn: {
-      Description: 'ARN of the OIDC provider',
-      Value: getOidcProviderArn(cicdAccountId, true),
     },
   };
 

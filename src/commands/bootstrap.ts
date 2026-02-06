@@ -193,12 +193,24 @@ async function buildDeploymentPlan(
     });
   }
 
-  // 3. Account Stacks (one per unique target account for OIDC provider)
+  // 3. Account Stacks (one per unique account for OIDC provider)
+  //    The CI/CD account must always be included since the Org stack relies
+  //    on the OIDC provider created by the Account Bootstrap stack.
   const accountStacks: AccountStackDeployment[] = [];
   const accountStackName = getAccountStackName();
 
   // Track accounts we've already added to avoid duplicates
   const accountsWithStacks = new Set<string>();
+
+  // Always include the CI/CD account first (Org stack depends on its OIDC provider)
+  accountsWithStacks.add(cicdAccountId);
+  accountStacks.push({
+    stackType: StackType.ACCOUNT,
+    stackName: accountStackName,
+    accountId: cicdAccountId,
+    region: cicdRegion,
+    action: await determineStackAction(accountStackName, cicdCredentials, cicdRegion),
+  });
 
   for (const pipeline of pipelines) {
     for (const stage of pipeline.stages) {
