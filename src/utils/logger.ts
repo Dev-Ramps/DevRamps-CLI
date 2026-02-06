@@ -168,6 +168,10 @@ export class MultiStackProgress {
       stack.status = success ? 'complete' : 'failed';
       stack.completed = success ? stack.total : stack.completed;
       if (failureReason) stack.failureReason = failureReason;
+      // Only set cfnStatus if it was never updated from polling (still STARTING or unset)
+      if (!stack.cfnStatus || stack.cfnStatus === 'STARTING') {
+        stack.cfnStatus = success ? 'NO_CHANGES' : (failureReason || 'FAILED');
+      }
       this.scheduleRender();
     }
   }
