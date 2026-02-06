@@ -92,10 +92,12 @@ export class MultiStackProgress {
       // Do initial render
       this.doRender();
       // Start spinner animation (slower to reduce flicker)
+      // unref() so the timer doesn't prevent process exit
       this.spinnerInterval = setInterval(() => {
         this.spinnerFrame = (this.spinnerFrame + 1) % SPINNER_FRAMES.length;
         this.scheduleRender();
       }, 100);
+      if (this.spinnerInterval.unref) this.spinnerInterval.unref();
     }
   }
 

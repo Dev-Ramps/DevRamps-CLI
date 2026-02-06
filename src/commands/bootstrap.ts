@@ -511,8 +511,10 @@ async function executeDeployment(
 
   if (results.failed === 0) {
     logger.success(`All ${results.success} stack(s) deployed successfully!`);
+    process.exit(0);
   } else {
     logger.warn(`${results.success} stack(s) succeeded, ${results.failed} stack(s) failed.`);
+    process.exit(1);
   }
 }
 
