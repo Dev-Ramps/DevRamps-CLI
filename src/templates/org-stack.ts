@@ -188,6 +188,7 @@ function buildOrgRolePolicies(orgSlug: string): object[] {
               'kms:Decrypt',
               'kms:GenerateDataKey*',
               'kms:DescribeKey',
+              'kms:CreateGrant',
             ],
             Resource: '*',
             Condition: {
