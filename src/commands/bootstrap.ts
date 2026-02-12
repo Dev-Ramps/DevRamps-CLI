@@ -360,7 +360,9 @@ async function showDryRunPlan(plan: DeploymentPlan): Promise<void> {
 
   const totalStacks = 1 + plan.pipelineStacks.length + plan.accountStacks.length + plan.stageStacks.length;
   logger.newline();
-  logger.info(`Total stacks to deploy (in parallel): ${totalStacks}`);
+  logger.info(`Total stacks to deploy: ${totalStacks}`);
+  logger.info(`  Phase 1: ${plan.accountStacks.length} Account stack(s) (deployed first)`);
+  logger.info(`  Phase 2: ${1 + plan.pipelineStacks.length + plan.stageStacks.length} Org/Pipeline/Stage stack(s) (deployed in parallel after Phase 1)`);
 }
 
 /**
@@ -404,32 +406,75 @@ async function executeDeployment(
 
   const totalStacks = 1 + plan.pipelineStacks.length + plan.accountStacks.length + plan.stageStacks.length;
 
+  const remainingStacks = 1 + plan.pipelineStacks.length + plan.stageStacks.length;
+
+  // Phase 1: Deploy all Account bootstrap stacks first
   logger.newline();
-  logger.header('Deploying All Stacks');
-  logger.info(`Deploying ${totalStacks} stack(s) in parallel...`);
+  logger.header('Phase 1: Deploying Account Bootstrap Stacks');
+  logger.info(`Deploying ${plan.accountStacks.length} account stack(s) in parallel...`);
   logger.newline();
 
-  // Initialize multi-stack progress display
-  const progress = getMultiStackProgress();
+  const accountProgress = getMultiStackProgress();
+  for (const stack of plan.accountStacks) {
+    accountProgress.addStack(stack.stackName, 'account', stack.accountId, stack.region, 1);
+  }
+  accountProgress.start();
 
-  // Register all stacks with estimated resource counts and types
-  progress.addStack(plan.orgStack.stackName, 'org', plan.orgStack.accountId, plan.orgStack.region, 5);
+  const accountResults = await Promise.all(
+    plan.accountStacks.map(async (stack) => {
+      try {
+        await deployAccountStack(stack, currentAccountId, options);
+        return { stack: `${stack.stackName} (${stack.accountId})`, success: true };
+      } catch (error) {
+        return {
+          stack: `${stack.stackName} (${stack.accountId})`,
+          success: false,
+          error: error instanceof Error ? error.message : String(error),
+        };
+      }
+    })
+  );
+
+  clearMultiStackProgress();
+
+  // Report account stack results
+  logger.newline();
+  for (const result of accountResults) {
+    if (result.success) {
+      logger.success(`${result.stack} deployed`);
+      results.success++;
+    } else {
+      logger.error(`${result.stack} failed: ${result.error}`);
+      results.failed++;
+    }
+  }
+
+  // If any account stack failed, abort before deploying remaining stacks
+  if (results.failed > 0) {
+    logger.newline();
+    logger.header('Deployment Summary');
+    logger.error(`${results.failed} account stack(s) failed. Skipping remaining ${remainingStacks} stack(s).`);
+    process.exit(1);
+  }
+
+  // Phase 2: Deploy all other stacks in parallel
+  logger.newline();
+  logger.header('Phase 2: Deploying Org, Pipeline, and Stage Stacks');
+  logger.info(`Deploying ${remainingStacks} stack(s) in parallel...`);
+  logger.newline();
+
+  const mainProgress = getMultiStackProgress();
+  mainProgress.addStack(plan.orgStack.stackName, 'org', plan.orgStack.accountId, plan.orgStack.region, 5);
   for (const stack of plan.pipelineStacks) {
     const resourceCount = stack.dockerArtifacts.length + stack.bundleArtifacts.length;
-    progress.addStack(stack.stackName, 'pipeline', stack.accountId, stack.region, Math.max(resourceCount, 1));
-  }
-  for (const stack of plan.accountStacks) {
-    progress.addStack(stack.stackName, 'account', stack.accountId, stack.region, 1);
+    mainProgress.addStack(stack.stackName, 'pipeline', stack.accountId, stack.region, Math.max(resourceCount, 1));
   }
   for (const stack of plan.stageStacks) {
     const resourceCount = stack.dockerArtifacts.length + stack.bundleArtifacts.length + 2;
-    progress.addStack(stack.stackName, 'stage', stack.accountId, stack.region, resourceCount);
+    mainProgress.addStack(stack.stackName, 'stage', stack.accountId, stack.region, resourceCount);
   }
+  mainProgress.start();
 
-  // Start the progress display (enters alternate screen)
-  progress.start();
-
-  // Create deployment promises for all stacks
   const orgPromise = (async () => {
     try {
       await deployOrgStack(plan, pipelines, authData, currentAccountId, options);
@@ -456,19 +501,6 @@ async function executeDeployment(
     }
   });
 
-  const accountPromises = plan.accountStacks.map(async (stack) => {
-    try {
-      await deployAccountStack(stack, currentAccountId, options);
-      return { stack: stack.stackName, success: true };
-    } catch (error) {
-      return {
-        stack: stack.stackName,
-        success: false,
-        error: error instanceof Error ? error.message : String(error),
-      };
-    }
-  });
-
   const stagePromises = plan.stageStacks.map(async (stack) => {
     try {
       await deployStageStack(stack, authData, currentAccountId, options);
@@ -482,20 +514,17 @@ async function executeDeployment(
     }
   });
 
-  // Wait for all stacks to complete
-  const allResults = await Promise.all([
+  const mainResults = await Promise.all([
     orgPromise,
     ...pipelinePromises,
-    ...accountPromises,
     ...stagePromises,
   ]);
 
-  // Clear progress display
   clearMultiStackProgress();
 
-  // Process results
+  // Report main stack results
   logger.newline();
-  for (const result of allResults) {
+  for (const result of mainResults) {
     if (result.success) {
       logger.success(`${result.stack} deployed`);
       results.success++;

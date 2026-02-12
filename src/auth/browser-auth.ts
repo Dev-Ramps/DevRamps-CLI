@@ -63,6 +63,13 @@ export async function authenticateViaBrowser(options: AuthOptions = {}): Promise
 
   const { server, port, callbackPromise } = await startCallbackServer(state);
 
+  // Handle Ctrl+C during auth flow — close the server so the process can exit
+  const sigintHandler = () => {
+    server.close();
+    process.exit(130);
+  };
+  process.on('SIGINT', sigintHandler);
+
   try {
     const redirectUri = `http://localhost:${port}`;
 
@@ -165,6 +172,7 @@ export async function authenticateViaBrowser(options: AuthOptions = {}): Promise
       cicdRegion: awsConfig.defaultRegion,
     };
   } finally {
+    process.removeListener('SIGINT', sigintHandler);
     // Always close the server
     await closeServer(server);
   }

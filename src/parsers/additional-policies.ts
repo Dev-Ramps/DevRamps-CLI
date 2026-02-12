@@ -67,8 +67,13 @@ export async function parseAdditionalPolicies(pipelineDir: string): Promise<IamP
       throw new Error(`Policy at index ${i} is not an object`);
     }
 
-    if (!('Statement' in policy) || !Array.isArray(policy.Statement)) {
-      throw new Error(`Policy at index ${i} is missing Statement array`);
+    if (!('Statement' in policy) || !policy.Statement || typeof policy.Statement !== 'object') {
+      throw new Error(`Policy at index ${i} is missing Statement`);
+    }
+
+    // Normalize a single statement into an array
+    if (!Array.isArray(policy.Statement)) {
+      policy.Statement = [policy.Statement];
     }
 
     validatedPolicies.push(policy as IamPolicy);
