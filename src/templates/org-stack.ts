@@ -187,6 +187,7 @@ function buildOrgRolePolicies(orgSlug: string): object[] {
               'kms:Encrypt',
               'kms:Decrypt',
               'kms:GenerateDataKey*',
+              'kms:DescribeKey',
             ],
             Resource: '*',
             Condition: {
@@ -233,6 +234,22 @@ function buildOrgRolePolicies(orgSlug: string): object[] {
               's3:GetBucketLocation',
             ],
             Resource: '*',
+          },
+          {
+            Sid: 'AllowSecretsManagerOperations',
+            Effect: 'Allow',
+            Action: [
+              'secretsmanager:CreateSecret',
+              'secretsmanager:GetSecretValue',
+              'secretsmanager:PutSecretValue',
+              'secretsmanager:UpdateSecret',
+              'secretsmanager:DeleteSecret',
+              'secretsmanager:DescribeSecret',
+              'secretsmanager:TagResource',
+            ],
+            Resource: {
+              'Fn::Sub': 'arn:aws:secretsmanager:*:${AWS::AccountId}:secret:devramps/*',
+            },
           },
         ],
       },
