@@ -114,14 +114,14 @@ export async function bootstrapCommand(options: BootstrapOptions): Promise<void>
     // Step 5: Handle dry run or actual deployment
     if (options.dryRun) {
       await showDryRunPlan(plan);
-      return;
+      process.exit(0);
     }
 
     // Step 6: Confirm with user
     const confirmed = await confirmDeploymentPlan(plan);
     if (!confirmed) {
       logger.info('Deployment cancelled by user.');
-      return;
+      process.exit(0);
     }
 
     // Step 7: Execute three-phase deployment
