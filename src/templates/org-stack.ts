@@ -34,13 +34,15 @@ export interface OrgStackOptions {
   cicdAccountId: string;
   /** All target account IDs that need access to Terraform state bucket */
   targetAccountIds: string[];
+  /** Override the OIDC provider URL (e.g. from endpoint override) */
+  oidcProviderUrl?: string;
 }
 
 /**
  * Generate the CloudFormation template for the org stack
  */
 export function generateOrgStackTemplate(options: OrgStackOptions): CloudFormationTemplate {
-  const { orgSlug, cicdAccountId, targetAccountIds } = options;
+  const { orgSlug, cicdAccountId, targetAccountIds, oidcProviderUrl } = options;
 
   const template = createBaseTemplate(`DevRamps Org Stack for ${orgSlug}`);
 
@@ -81,7 +83,7 @@ export function generateOrgStackTemplate(options: OrgStackOptions): CloudFormati
   };
 
   // 4. DevRamps-CICD-DeploymentRole (org-wide orchestration)
-  const trustPolicy = buildOidcTrustPolicy(cicdAccountId, `org:${orgSlug}`);
+  const trustPolicy = buildOidcTrustPolicy(cicdAccountId, `org:${orgSlug}/cicd`, oidcProviderUrl);
   const orgRolePolicies = buildOrgRolePolicies(orgSlug);
 
   template.Resources.DevRampsCICDDeploymentRole = createIamRoleResource(

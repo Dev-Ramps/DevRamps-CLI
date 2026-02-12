@@ -14,6 +14,8 @@ export interface GenerateTemplateOptions {
   steps: PipelineStep[];
   additionalPolicies: IamPolicy[];
   accountId: string;
+  /** Override the OIDC provider URL (e.g. from endpoint override) */
+  oidcProviderUrl?: string;
 }
 
 /**
@@ -31,7 +33,8 @@ function sanitizeName(name: string): string {
 export function generateBootstrapTemplate(
   options: GenerateTemplateOptions
 ): CloudFormationTemplate {
-  const { pipelineSlug, orgSlug, steps, additionalPolicies, accountId } = options;
+  const { pipelineSlug, orgSlug, steps, additionalPolicies, accountId, oidcProviderUrl } = options;
+  const providerUrl = oidcProviderUrl || OIDC_PROVIDER_URL;
 
   const template: CloudFormationTemplate = {
     AWSTemplateFormatVersion: '2010-09-09',
@@ -58,8 +61,8 @@ export function generateBootstrapTemplate(
     Type: 'AWS::IAM::OIDCProvider',
     Condition: 'CreateOIDCProvider',
     Properties: {
-      Url: `https://${OIDC_PROVIDER_URL}`,
-      ClientIdList: [OIDC_PROVIDER_URL],
+      Url: `https://${providerUrl}`,
+      ClientIdList: [providerUrl],
       ThumbprintList: [getOidcThumbprint()],
       Tags: [
         { Key: 'CreatedBy', Value: 'DevRamps' },
@@ -75,13 +78,13 @@ export function generateBootstrapTemplate(
       {
         Effect: 'Allow',
         Principal: {
-          Federated: `arn:aws:iam::${accountId}:oidc-provider/${OIDC_PROVIDER_URL}`,
+          Federated: `arn:aws:iam::${accountId}:oidc-provider/${providerUrl}`,
         },
         Action: 'sts:AssumeRoleWithWebIdentity',
         Condition: {
           StringEquals: {
-            [`${OIDC_PROVIDER_URL}:sub`]: `org:${orgSlug}/pipeline:${pipelineSlug}`,
-            [`${OIDC_PROVIDER_URL}:aud`]: OIDC_PROVIDER_URL,
+            [`${providerUrl}:sub`]: `org:${orgSlug}/pipeline:${pipelineSlug}`,
+            [`${providerUrl}:aud`]: providerUrl,
           },
         },
       },
@@ -177,7 +180,7 @@ export function generateBootstrapTemplate(
         'Fn::If': [
           'CreateOIDCProvider',
           { 'Fn::GetAtt': ['DevRampsOIDCProvider', 'Arn'] },
-          `arn:aws:iam::${accountId}:oidc-provider/${OIDC_PROVIDER_URL}`,
+          `arn:aws:iam::${accountId}:oidc-provider/${providerUrl}`,
         ],
       },
     },

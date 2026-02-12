@@ -12,16 +12,21 @@ import type { CloudFormationTemplate } from '../types/aws.js';
 import { createBaseTemplate, addOidcProviderResource } from './common.js';
 import { getAccountStackName } from '../naming/index.js';
 
+export interface AccountStackOptions {
+  /** Override the OIDC provider URL (e.g. from endpoint override) */
+  oidcProviderUrl?: string;
+}
+
 /**
  * Generate the CloudFormation template for an account bootstrap stack
  */
-export function generateAccountStackTemplate(): CloudFormationTemplate {
+export function generateAccountStackTemplate(options?: AccountStackOptions): CloudFormationTemplate {
   const template = createBaseTemplate(
     'DevRamps Account Bootstrap Stack - Creates OIDC provider for the account'
   );
 
   // Only resource: OIDC Provider (unconditional - this stack owns it)
-  addOidcProviderResource(template, false);
+  addOidcProviderResource(template, false, options?.oidcProviderUrl);
 
   // Outputs
   template.Outputs = {

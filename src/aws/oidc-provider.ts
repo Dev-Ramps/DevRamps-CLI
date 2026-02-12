@@ -21,8 +21,10 @@ export interface OidcProviderInfo {
 
 export async function checkOidcProviderExists(
   credentials?: AwsCredentialIdentity,
-  region?: string
+  region?: string,
+  oidcProviderUrl?: string
 ): Promise<OidcProviderInfo> {
+  const providerUrl = oidcProviderUrl || OIDC_PROVIDER_URL;
   const client = new IAMClient({
     credentials,
     region,
@@ -43,7 +45,7 @@ export async function checkOidcProviderExists(
           })
         );
 
-        if (providerDetails.Url?.includes(OIDC_PROVIDER_URL)) {
+        if (providerDetails.Url?.includes(providerUrl)) {
           logger.verbose(`Found existing OIDC provider: ${provider.Arn}`);
           return {
             exists: true,
@@ -55,7 +57,7 @@ export async function checkOidcProviderExists(
       }
     }
 
-    logger.verbose(`No existing OIDC provider found for ${OIDC_PROVIDER_URL}`);
+    logger.verbose(`No existing OIDC provider found for ${providerUrl}`);
     return { exists: false };
   } catch (error) {
     logger.verbose(`Error checking OIDC providers: ${error instanceof Error ? error.message : String(error)}`);
@@ -67,8 +69,9 @@ export async function checkOidcProviderExists(
  * Get the OIDC provider ARN for a given account ID
  * This is used to reference the provider in IAM trust policies
  */
-export function getOidcProviderArn(accountId: string): string {
-  return `arn:aws:iam::${accountId}:oidc-provider/${OIDC_PROVIDER_URL}`;
+export function getOidcProviderArn(accountId: string, oidcProviderUrl?: string): string {
+  const providerUrl = oidcProviderUrl || OIDC_PROVIDER_URL;
+  return `arn:aws:iam::${accountId}:oidc-provider/${providerUrl}`;
 }
 
 /**

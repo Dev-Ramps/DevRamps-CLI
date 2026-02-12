@@ -43,11 +43,15 @@ export function sanitizeResourceId(name: string): string {
  *
  * @param template - The template to modify
  * @param conditional - Whether to make creation conditional
+ * @param oidcProviderUrl - Override the OIDC provider URL (e.g. from endpoint override)
  */
 export function addOidcProviderResource(
   template: CloudFormationTemplate,
-  conditional: boolean = true
+  conditional: boolean = true,
+  oidcProviderUrl?: string
 ): void {
+  const providerUrl = oidcProviderUrl || OIDC_PROVIDER_URL;
+
   if (conditional) {
     template.Parameters!.OIDCProviderExists = {
       Type: 'String',
@@ -65,8 +69,8 @@ export function addOidcProviderResource(
     Type: 'AWS::IAM::OIDCProvider',
     ...(conditional ? { Condition: 'CreateOIDCProvider' } : {}),
     Properties: {
-      Url: `https://${OIDC_PROVIDER_URL}`,
-      ClientIdList: [OIDC_PROVIDER_URL],
+      Url: `https://${providerUrl}`,
+      ClientIdList: [providerUrl],
       ThumbprintList: [getOidcThumbprint()],
       Tags: STANDARD_TAGS,
     },
@@ -76,13 +80,15 @@ export function addOidcProviderResource(
 /**
  * Get the OIDC provider ARN (handles conditional creation)
  */
-export function getOidcProviderArn(accountId: string, conditional: boolean = true): unknown {
+export function getOidcProviderArn(accountId: string, conditional: boolean = true, oidcProviderUrl?: string): unknown {
+  const providerUrl = oidcProviderUrl || OIDC_PROVIDER_URL;
+
   if (conditional) {
     return {
       'Fn::If': [
         'CreateOIDCProvider',
         { 'Fn::GetAtt': ['DevRampsOIDCProvider', 'Arn'] },
-        `arn:aws:iam::${accountId}:oidc-provider/${OIDC_PROVIDER_URL}`,
+        `arn:aws:iam::${accountId}:oidc-provider/${providerUrl}`,
       ],
     };
   }
@@ -94,21 +100,24 @@ export function getOidcProviderArn(accountId: string, conditional: boolean = tru
  */
 export function buildOidcTrustPolicy(
   accountId: string,
-  subject: string
+  subject: string,
+  oidcProviderUrl?: string
 ): object {
+  const providerUrl = oidcProviderUrl || OIDC_PROVIDER_URL;
+
   return {
     Version: '2012-10-17',
     Statement: [
       {
         Effect: 'Allow',
         Principal: {
-          Federated: `arn:aws:iam::${accountId}:oidc-provider/${OIDC_PROVIDER_URL}`,
+          Federated: `arn:aws:iam::${accountId}:oidc-provider/${providerUrl}`,
         },
         Action: 'sts:AssumeRoleWithWebIdentity',
         Condition: {
           StringEquals: {
-            [`${OIDC_PROVIDER_URL}:sub`]: subject,
-            [`${OIDC_PROVIDER_URL}:aud`]: OIDC_PROVIDER_URL,
+            [`${providerUrl}:sub`]: subject,
+            [`${providerUrl}:aud`]: providerUrl,
           },
         },
       },

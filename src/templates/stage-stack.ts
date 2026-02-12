@@ -43,6 +43,8 @@ export interface StageStackOptions {
   dockerArtifacts: DockerArtifact[];
   /** All Bundle artifacts (for stage S3 buckets) */
   bundleArtifacts: BundleArtifact[];
+  /** Override the OIDC provider URL (e.g. from endpoint override) */
+  oidcProviderUrl?: string;
 }
 
 /**
@@ -58,6 +60,7 @@ export function generateStageStackTemplate(options: StageStackOptions): CloudFor
     additionalPolicies,
     dockerArtifacts,
     bundleArtifacts,
+    oidcProviderUrl,
   } = options;
 
   const template = createBaseTemplate(
@@ -68,7 +71,7 @@ export function generateStageStackTemplate(options: StageStackOptions): CloudFor
 
   // 1. Stage deployment role
   const roleName = generateStageRoleName(pipelineSlug, stageName);
-  const trustPolicy = buildStageTrustPolicy(accountId, orgSlug, pipelineSlug, stageName);
+  const trustPolicy = buildStageTrustPolicy(accountId, orgSlug, pipelineSlug, oidcProviderUrl);
   const policies = buildStagePolicies(steps, additionalPolicies);
 
   template.Resources.StageDeploymentRole = createIamRoleResource(
@@ -126,7 +129,8 @@ export function generateStageStackTemplate(options: StageStackOptions): CloudFor
 
   // Outputs
   // Note: OIDC provider ARN is constructed manually (provider created by Account Bootstrap stack)
-  const oidcProviderArn = `arn:aws:iam::${accountId}:oidc-provider/${OIDC_PROVIDER_URL}`;
+  const providerUrl = oidcProviderUrl || OIDC_PROVIDER_URL;
+  const oidcProviderArn = `arn:aws:iam::${accountId}:oidc-provider/${providerUrl}`;
 
   template.Outputs = {
     StageRoleArn: {
@@ -177,16 +181,16 @@ export function generateStageStackTemplate(options: StageStackOptions): CloudFor
 
 /**
  * Build trust policy for the stage deployment role
- * Uses OIDC federation with org/pipeline/stage subject
+ * Uses OIDC federation with org/pipeline subject
  */
 function buildStageTrustPolicy(
   accountId: string,
   orgSlug: string,
   pipelineSlug: string,
-  stageName: string
+  oidcProviderUrl?: string
 ): object {
-  const subject = `org:${orgSlug}/pipeline:${pipelineSlug}/stage:${stageName}`;
-  return buildOidcTrustPolicy(accountId, subject);
+  const subject = `org:${orgSlug}/pipeline:${pipelineSlug}`;
+  return buildOidcTrustPolicy(accountId, subject, oidcProviderUrl);
 }
 
 /**
