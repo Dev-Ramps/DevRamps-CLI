@@ -190,12 +190,7 @@ function buildOrgRolePolicies(orgSlug: string): object[] {
               'kms:DescribeKey',
               'kms:CreateGrant',
             ],
-            Resource: '*',
-            Condition: {
-              StringEquals: {
-                'kms:CallerAccount': { Ref: 'AWS::AccountId' },
-              },
-            },
+            Resource: { 'Fn::GetAtt': ['DevRampsKMSKey', 'Arn'] },
           },
           {
             Sid: 'AllowS3TerraformState',
