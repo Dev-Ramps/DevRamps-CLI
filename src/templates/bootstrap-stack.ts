@@ -62,7 +62,7 @@ export function generateBootstrapTemplate(
     Condition: 'CreateOIDCProvider',
     Properties: {
       Url: `https://${providerUrl}`,
-      ClientIdList: [providerUrl],
+      ClientIdList: ['sts.amazonaws.com'],
       ThumbprintList: [getOidcThumbprint()],
       Tags: [
         { Key: 'CreatedBy', Value: 'DevRamps' },
@@ -84,7 +84,7 @@ export function generateBootstrapTemplate(
         Condition: {
           StringEquals: {
             [`${providerUrl}:sub`]: `org:${orgSlug}/pipeline:${pipelineSlug}`,
-            [`${providerUrl}:aud`]: providerUrl,
+            [`${providerUrl}:aud`]: 'sts.amazonaws.com',
           },
         },
       },

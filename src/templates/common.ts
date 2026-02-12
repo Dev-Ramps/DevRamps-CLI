@@ -70,7 +70,7 @@ export function addOidcProviderResource(
     ...(conditional ? { Condition: 'CreateOIDCProvider' } : {}),
     Properties: {
       Url: `https://${providerUrl}`,
-      ClientIdList: [providerUrl],
+      ClientIdList: ['sts.amazonaws.com'],
       ThumbprintList: [getOidcThumbprint()],
       Tags: STANDARD_TAGS,
     },
@@ -117,7 +117,7 @@ export function buildOidcTrustPolicy(
         Condition: {
           StringEquals: {
             [`${providerUrl}:sub`]: subject,
-            [`${providerUrl}:aud`]: providerUrl,
+            [`${providerUrl}:aud`]: 'sts.amazonaws.com',
           },
         },
       },
