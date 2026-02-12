@@ -203,6 +203,27 @@ function buildStagePolicies(
 ): object[] {
   const policies: object[] = [];
 
+  // Base validation policy for resource validation (ECR, S3, CloudWatch)
+  policies.push({
+    PolicyName: 'DevRampsValidationPolicy',
+    PolicyDocument: {
+      Version: '2012-10-17',
+      Statement: [
+        {
+          Sid: 'AllowResourceValidation',
+          Effect: 'Allow',
+          Action: [
+            'ecr:DescribeRepositories',
+            's3:ListBucket',
+            's3:GetBucketLocation',
+            'cloudwatch:DescribeAlarms',
+          ],
+          Resource: '*',
+        },
+      ],
+    },
+  });
+
   // Add policy for each step type that has permissions
   for (const step of steps) {
     if (!hasPermissions(step.type)) {

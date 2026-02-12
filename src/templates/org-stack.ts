@@ -221,6 +221,16 @@ function buildOrgRolePolicies(orgSlug: string): object[] {
               'ecr:InitiateLayerUpload',
               'ecr:UploadLayerPart',
               'ecr:CompleteLayerUpload',
+              'ecr:DescribeRepositories',
+            ],
+            Resource: '*',
+          },
+          {
+            Sid: 'AllowS3ArtifactBuckets',
+            Effect: 'Allow',
+            Action: [
+              's3:ListBucket',
+              's3:GetBucketLocation',
             ],
             Resource: '*',
           },
