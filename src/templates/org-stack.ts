@@ -228,6 +228,8 @@ function buildOrgRolePolicies(orgSlug: string): object[] {
             Action: [
               's3:ListBucket',
               's3:GetBucketLocation',
+              's3:GetObject',
+              's3:PutObject',
             ],
             Resource: '*',
           },
