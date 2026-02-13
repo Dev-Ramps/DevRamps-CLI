@@ -19,7 +19,7 @@ export interface ResourceStatus {
 /**
  * Stack type for display purposes
  */
-export type StackType = 'org' | 'pipeline' | 'account' | 'stage';
+export type StackType = 'org' | 'pipeline' | 'account' | 'stage' | 'import';
 
 /**
  * Stack status for multi-stack progress display
@@ -239,6 +239,7 @@ export class MultiStackProgress {
       case 'pipeline': return 'PIPE';
       case 'account': return 'ACCT';
       case 'stage': return 'STAGE';
+      case 'import': return 'IMPORT';
     }
   }
 

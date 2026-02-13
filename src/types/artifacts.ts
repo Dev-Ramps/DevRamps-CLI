@@ -103,6 +103,9 @@ export type DockerArtifact = DockerBuildArtifact | DockerImportArtifact;
 /** Union type for all Bundle artifacts */
 export type BundleArtifact = BundleBuildArtifact | BundleImportArtifact;
 
+/** Union type for all import artifacts */
+export type ImportArtifact = DockerImportArtifact | BundleImportArtifact;
+
 /** Union type for any artifact */
 export type Artifact = DockerArtifact | BundleArtifact;
 
@@ -114,6 +117,13 @@ export interface ParsedArtifacts {
   docker: DockerArtifact[];
   /** All Bundle artifacts (BUILD and IMPORT) */
   bundle: BundleArtifact[];
+}
+
+/**
+ * An external account that artifacts are imported from
+ */
+export interface ImportSourceAccount {
+  accountId: string;
 }
 
 /**

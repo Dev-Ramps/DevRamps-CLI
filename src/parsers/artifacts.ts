@@ -12,6 +12,7 @@ import type {
   BundleBuildArtifact,
   BundleImportArtifact,
   ArtifactType,
+  ImportSourceAccount,
 } from '../types/artifacts.js';
 import * as logger from '../utils/logger.js';
 
@@ -132,4 +133,36 @@ export function getArtifactId(artifact: { name: string; id?: string }): string {
     .replace(/[^a-z0-9]/g, '-')
     .replace(/-+/g, '-')
     .replace(/^-|-$/g, '');
+}
+
+/**
+ * Extract unique import source accounts from parsed artifacts.
+ * For Docker imports: parses account ID from the ECR URL prefix.
+ * For Bundle imports: reads the explicit source_account field.
+ */
+export function extractImportSourceAccounts(artifacts: ParsedArtifacts): ImportSourceAccount[] {
+  const accountIds = new Set<string>();
+
+  // Docker IMPORT artifacts: extract account from ECR URL
+  for (const artifact of artifacts.docker) {
+    if (artifact.type !== 'DEVRAMPS:DOCKER:IMPORT') continue;
+    const url = artifact.params?.source_image_url;
+    if (!url) continue;
+
+    const match = url.match(/^(\d+)\.dkr\.ecr\./);
+    if (match) {
+      accountIds.add(match[1]);
+    }
+  }
+
+  // Bundle IMPORT artifacts: read source_account directly
+  for (const artifact of artifacts.bundle) {
+    if (artifact.type !== 'DEVRAMPS:BUNDLE:IMPORT') continue;
+    const account = artifact.params?.source_account;
+    if (account && typeof account === 'string') {
+      accountIds.add(account);
+    }
+  }
+
+  return Array.from(accountIds).map(accountId => ({ accountId }));
 }

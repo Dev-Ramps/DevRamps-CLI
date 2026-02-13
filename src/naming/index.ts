@@ -194,6 +194,26 @@ export function getAccountStackName(): string {
 }
 
 // ============================================================================
+// Import Stack Names and Roles
+// ============================================================================
+
+/**
+ * Generate import stack name for a pipeline
+ * Format: DevRamps-<pipeline_slug>-Import
+ */
+export function getImportStackName(pipelineSlug: string): string {
+  return truncateName(`DevRamps-${pipelineSlug}-Import`, CF_STACK_MAX_LENGTH);
+}
+
+/**
+ * Generate import role name for a pipeline
+ * Format: DevRamps-<pipeline_slug>-ImportRole
+ */
+export function generateImportRoleName(pipelineSlug: string): string {
+  return truncateName(`DevRamps-${pipelineSlug}-ImportRole`, IAM_ROLE_MAX_LENGTH);
+}
+
+// ============================================================================
 // KMS Key Names
 // ============================================================================
 

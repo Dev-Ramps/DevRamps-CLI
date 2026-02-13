@@ -13,6 +13,7 @@ export enum StackType {
   PIPELINE = 'Pipeline',
   ACCOUNT = 'Account',
   STAGE = 'Stage',
+  IMPORT = 'Import',
 }
 
 export interface BaseStackDeployment {
@@ -74,7 +75,17 @@ export interface StageStackDeployment extends BaseStackDeployment {
   bundleArtifacts: BundleArtifact[];
 }
 
-export type StackDeployment = OrgStackDeployment | PipelineStackDeployment | AccountStackDeployment | StageStackDeployment;
+/**
+ * Import Stack - deployed per pipeline per import source account
+ * Contains: Import role for reading artifacts from external accounts
+ */
+export interface ImportStackDeployment extends BaseStackDeployment {
+  stackType: StackType.IMPORT;
+  pipelineSlug: string;
+  orgSlug: string;
+}
+
+export type StackDeployment = OrgStackDeployment | PipelineStackDeployment | AccountStackDeployment | StageStackDeployment | ImportStackDeployment;
 
 /**
  * Complete deployment plan containing all stack types
@@ -88,6 +99,8 @@ export interface DeploymentPlan {
   /** Account stacks - one per unique target account for OIDC provider */
   accountStacks: AccountStackDeployment[];
   stageStacks: StageStackDeployment[];
+  /** Import stacks - one per pipeline per import source account */
+  importStacks: ImportStackDeployment[];
 }
 
 /**
@@ -107,4 +120,8 @@ export function isAccountStack(stack: StackDeployment): stack is AccountStackDep
 
 export function isStageStack(stack: StackDeployment): stack is StageStackDeployment {
   return stack.stackType === StackType.STAGE;
+}
+
+export function isImportStack(stack: StackDeployment): stack is ImportStackDeployment {
+  return stack.stackType === StackType.IMPORT;
 }
