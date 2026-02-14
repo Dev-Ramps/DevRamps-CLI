@@ -279,7 +279,7 @@ export class MultiStackProgress {
     const bar = '█'.repeat(filled) + '░'.repeat(empty);
 
     // Stack type label (fixed width)
-    const typeLabel = this.getTypeLabel(stackType).padEnd(5);
+    const typeLabel = this.getTypeLabel(stackType).padEnd(6);
 
     // Full account ID and region
     const accountLabel = `${accountId} ${region.padEnd(12)}`;
