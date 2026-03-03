@@ -14,6 +14,9 @@ import { MIRROR_ECR_PERMISSIONS } from './mirror-ecr.js';
 import { MIRROR_S3_PERMISSIONS } from './mirror-s3.js';
 import { BUNDLE_IMPORT_PERMISSIONS } from './bundle-import.js';
 import { DOCKER_IMPORT_PERMISSIONS } from './docker-import.js';
+import { LAMBDA_DEPLOY_PERMISSIONS } from './lambda-deploy.js';
+import { LAMBDA_INVOKE_PERMISSIONS } from './lambda-invoke.js';
+import { CLOUDFRONT_INVALIDATE_PERMISSIONS } from './cloudfront-invalidate.js';
 import { getCustomPermissions } from './custom.js';
 
 export interface StepPermissions {
@@ -26,6 +29,9 @@ const PERMISSIONS_REGISTRY: Record<string, StepPermissions> = {
   'DEVRAMPS:EKS:DEPLOY': EKS_DEPLOY_PERMISSIONS,
   'DEVRAMPS:EKS:HELM': EKS_HELM_PERMISSIONS,
   'DEVRAMPS:ECS:DEPLOY': ECS_DEPLOY_PERMISSIONS,
+  'DEVRAMPS:LAMBDA:DEPLOY': LAMBDA_DEPLOY_PERMISSIONS,
+  'DEVRAMPS:LAMBDA:INVOKE': LAMBDA_INVOKE_PERMISSIONS,
+  'DEVRAMPS:CLOUDFRONT:INVALIDATE': CLOUDFRONT_INVALIDATE_PERMISSIONS,
 
   // Artifact mirroring steps (CI/CD account -> deployment account)
   'DEVRAMPS:MIRROR:ECR': MIRROR_ECR_PERMISSIONS,
