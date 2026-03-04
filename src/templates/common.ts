@@ -101,27 +101,40 @@ export function getOidcProviderArn(accountId: string, conditional: boolean = tru
 export function buildOidcTrustPolicy(
   accountId: string,
   subject: string,
-  oidcProviderUrl?: string
+  oidcProviderUrl?: string,
+  additionalTrustedAccounts?: string[]
 ): object {
   const providerUrl = oidcProviderUrl || OIDC_PROVIDER_URL;
 
-  return {
-    Version: '2012-10-17',
-    Statement: [
-      {
-        Effect: 'Allow',
-        Principal: {
-          Federated: `arn:aws:iam::${accountId}:oidc-provider/${providerUrl}`,
-        },
-        Action: 'sts:AssumeRoleWithWebIdentity',
-        Condition: {
-          StringEquals: {
-            [`${providerUrl}:sub`]: subject,
-            [`${providerUrl}:aud`]: 'sts.amazonaws.com',
-          },
+  const statements: object[] = [
+    {
+      Effect: 'Allow',
+      Principal: {
+        Federated: `arn:aws:iam::${accountId}:oidc-provider/${providerUrl}`,
+      },
+      Action: 'sts:AssumeRoleWithWebIdentity',
+      Condition: {
+        StringEquals: {
+          [`${providerUrl}:sub`]: subject,
+          [`${providerUrl}:aud`]: 'sts.amazonaws.com',
         },
       },
-    ],
+    },
+  ];
+
+  if (additionalTrustedAccounts && additionalTrustedAccounts.length > 0) {
+    statements.push({
+      Effect: 'Allow',
+      Principal: {
+        AWS: additionalTrustedAccounts.map(id => `arn:aws:iam::${id}:root`),
+      },
+      Action: 'sts:AssumeRole',
+    });
+  }
+
+  return {
+    Version: '2012-10-17',
+    Statement: statements,
   };
 }
 

@@ -36,13 +36,15 @@ export interface OrgStackOptions {
   targetAccountIds: string[];
   /** Override the OIDC provider URL (e.g. from endpoint override) */
   oidcProviderUrl?: string;
+  /** Additional AWS account IDs to add to role trust policies (for local dev testing) */
+  additionalTrustedAccounts?: string[];
 }
 
 /**
  * Generate the CloudFormation template for the org stack
  */
 export function generateOrgStackTemplate(options: OrgStackOptions): CloudFormationTemplate {
-  const { orgSlug, cicdAccountId, targetAccountIds, oidcProviderUrl } = options;
+  const { orgSlug, cicdAccountId, targetAccountIds, oidcProviderUrl, additionalTrustedAccounts } = options;
 
   const template = createBaseTemplate(`DevRamps Org Stack for ${orgSlug}`);
 
@@ -83,7 +85,7 @@ export function generateOrgStackTemplate(options: OrgStackOptions): CloudFormati
   };
 
   // 4. DevRamps-CICD-DeploymentRole (org-wide orchestration)
-  const trustPolicy = buildOidcTrustPolicy(cicdAccountId, `org:${orgSlug}/cicd`, oidcProviderUrl);
+  const trustPolicy = buildOidcTrustPolicy(cicdAccountId, `org:${orgSlug}/cicd`, oidcProviderUrl, additionalTrustedAccounts);
   const orgRolePolicies = buildOrgRolePolicies(orgSlug);
 
   template.Resources.DevRampsCICDDeploymentRole = createIamRoleResource(

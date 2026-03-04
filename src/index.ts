@@ -37,6 +37,10 @@ program
     '--endpoint-override <url>',
     'Override the DevRamps API endpoint (for testing, e.g., http://localhost:3000)'
   )
+  .option(
+    '--additional-trusted-accounts <accounts>',
+    'Comma-separated AWS account IDs to add to role trust policies (for local dev testing)'
+  )
   .action(bootstrapCommand);
 
 program.parse();

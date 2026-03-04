@@ -8,6 +8,7 @@ export interface BootstrapOptions {
   dryRun?: boolean;
   verbose?: boolean;
   endpointOverride?: string;
+  additionalTrustedAccounts?: string;
 }
 
 export interface AuthData {

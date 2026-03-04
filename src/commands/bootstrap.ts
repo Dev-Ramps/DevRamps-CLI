@@ -129,7 +129,10 @@ export async function bootstrapCommand(options: BootstrapOptions): Promise<void>
 
     // Step 7: Execute three-phase deployment
     const oidcProviderUrl = getOidcProviderUrlFromEndpoint(options.endpointOverride);
-    await executeDeployment(plan, pipelines, pipelineArtifacts, authData, identity.accountId, options, oidcProviderUrl);
+    const additionalTrustedAccounts = options.additionalTrustedAccounts
+      ? options.additionalTrustedAccounts.split(',').map(s => s.trim())
+      : undefined;
+    await executeDeployment(plan, pipelines, pipelineArtifacts, authData, identity.accountId, options, oidcProviderUrl, additionalTrustedAccounts);
 
   } catch (error) {
     if (error instanceof DevRampsError) {
@@ -490,7 +493,8 @@ async function executeDeployment(
   authData: AuthData,
   currentAccountId: string,
   options: BootstrapOptions,
-  oidcProviderUrl?: string
+  oidcProviderUrl?: string,
+  additionalTrustedAccounts?: string[]
 ): Promise<void> {
   const results = { success: 0, failed: 0 };
 
@@ -568,7 +572,7 @@ async function executeDeployment(
 
   const orgPromise = (async () => {
     try {
-      await deployOrgStack(plan, pipelines, authData, currentAccountId, options, oidcProviderUrl);
+      await deployOrgStack(plan, pipelines, authData, currentAccountId, options, oidcProviderUrl, additionalTrustedAccounts);
       return { stack: plan.orgStack.stackName, success: true };
     } catch (error) {
       return {
@@ -594,7 +598,7 @@ async function executeDeployment(
 
   const stagePromises = plan.stageStacks.map(async (stack) => {
     try {
-      await deployStageStack(stack, authData, currentAccountId, options, oidcProviderUrl);
+      await deployStageStack(stack, authData, currentAccountId, options, oidcProviderUrl, additionalTrustedAccounts);
       return { stack: stack.stackName, success: true };
     } catch (error) {
       return {
@@ -607,7 +611,7 @@ async function executeDeployment(
 
   const importPromises = plan.importStacks.map(async (stack) => {
     try {
-      await deployImportStack(stack, currentAccountId, options, oidcProviderUrl);
+      await deployImportStack(stack, currentAccountId, options, oidcProviderUrl, additionalTrustedAccounts);
       return { stack: `${stack.stackName} (${stack.accountId})`, success: true };
     } catch (error) {
       return {
@@ -661,7 +665,8 @@ async function deployOrgStack(
   authData: AuthData,
   currentAccountId: string,
   options: BootstrapOptions,
-  oidcProviderUrl?: string
+  oidcProviderUrl?: string,
+  additionalTrustedAccounts?: string[]
 ): Promise<void> {
   const { orgSlug, cicdAccountId, cicdRegion } = authData;
 
@@ -707,6 +712,7 @@ async function deployOrgStack(
     cicdAccountId,
     targetAccountIds,
     oidcProviderUrl,
+    additionalTrustedAccounts,
   });
 
   const deployOptions = {
@@ -811,7 +817,8 @@ async function deployStageStack(
   authData: AuthData,
   currentAccountId: string,
   options: BootstrapOptions,
-  oidcProviderUrl?: string
+  oidcProviderUrl?: string,
+  additionalTrustedAccounts?: string[]
 ): Promise<void> {
   // Get credentials for stage account
   const credentials = stack.accountId !== currentAccountId
@@ -835,6 +842,7 @@ async function deployStageStack(
     dockerArtifacts: stack.dockerArtifacts,
     bundleArtifacts: stack.bundleArtifacts,
     oidcProviderUrl,
+    additionalTrustedAccounts,
   });
 
   const deployOptions = {
@@ -859,7 +867,8 @@ async function deployImportStack(
   stack: ImportStackDeployment,
   currentAccountId: string,
   options: BootstrapOptions,
-  oidcProviderUrl?: string
+  oidcProviderUrl?: string,
+  additionalTrustedAccounts?: string[]
 ): Promise<void> {
   // Get credentials for the import source account
   const credentials = stack.accountId !== currentAccountId
@@ -876,6 +885,7 @@ async function deployImportStack(
     orgSlug: stack.orgSlug,
     accountId: stack.accountId,
     oidcProviderUrl,
+    additionalTrustedAccounts,
   });
 
   const deployOptions = {

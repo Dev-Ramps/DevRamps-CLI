@@ -45,6 +45,8 @@ export interface StageStackOptions {
   bundleArtifacts: BundleArtifact[];
   /** Override the OIDC provider URL (e.g. from endpoint override) */
   oidcProviderUrl?: string;
+  /** Additional AWS account IDs to add to role trust policies (for local dev testing) */
+  additionalTrustedAccounts?: string[];
 }
 
 /**
@@ -61,6 +63,7 @@ export function generateStageStackTemplate(options: StageStackOptions): CloudFor
     dockerArtifacts,
     bundleArtifacts,
     oidcProviderUrl,
+    additionalTrustedAccounts,
   } = options;
 
   const template = createBaseTemplate(
@@ -71,7 +74,7 @@ export function generateStageStackTemplate(options: StageStackOptions): CloudFor
 
   // 1. Stage deployment role
   const roleName = generateStageRoleName(pipelineSlug, stageName);
-  const trustPolicy = buildStageTrustPolicy(accountId, orgSlug, pipelineSlug, oidcProviderUrl);
+  const trustPolicy = buildStageTrustPolicy(accountId, orgSlug, pipelineSlug, oidcProviderUrl, additionalTrustedAccounts);
   const policies = buildStagePolicies(steps, additionalPolicies);
 
   template.Resources.StageDeploymentRole = createIamRoleResource(
@@ -187,10 +190,11 @@ function buildStageTrustPolicy(
   accountId: string,
   orgSlug: string,
   pipelineSlug: string,
-  oidcProviderUrl?: string
+  oidcProviderUrl?: string,
+  additionalTrustedAccounts?: string[]
 ): object {
   const subject = `org:${orgSlug}/pipeline:${pipelineSlug}`;
-  return buildOidcTrustPolicy(accountId, subject, oidcProviderUrl);
+  return buildOidcTrustPolicy(accountId, subject, oidcProviderUrl, additionalTrustedAccounts);
 }
 
 /**
