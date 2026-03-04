@@ -39,6 +39,7 @@ import {
   type ImportStackDeployment,
 } from '../types/stacks.js';
 import type { ParsedArtifacts } from '../types/artifacts.js';
+import type { AwsCredentialIdentity } from '@aws-sdk/types';
 
 /**
  * Extract the hostname from an endpoint override URL.
@@ -379,7 +380,7 @@ async function buildDeploymentPlan(
  */
 async function determineStackAction(
   stackName: string,
-  credentials: Awaited<ReturnType<typeof assumeRoleForAccount>>['credentials'] | undefined,
+  credentials: AwsCredentialIdentity | undefined,
   region: string
 ): Promise<'CREATE' | 'UPDATE'> {
   try {

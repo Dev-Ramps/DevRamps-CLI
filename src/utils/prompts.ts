@@ -4,15 +4,28 @@
 
 import inquirer from 'inquirer';
 import * as logger from './logger.js';
-import type { DeploymentPlan, StackDeployment } from '../types/config.js';
 
-export async function confirmDeployment(plan: DeploymentPlan): Promise<boolean> {
+interface ConfirmationStack {
+  pipelineSlug: string;
+  accountId: string;
+  stackName: string;
+  action: string;
+  steps: string[];
+  additionalPoliciesCount: number;
+}
+
+interface ConfirmationPlan {
+  orgSlug: string;
+  stacks: ConfirmationStack[];
+}
+
+export async function confirmDeployment(plan: ConfirmationPlan): Promise<boolean> {
   logger.header('DevRamps Bootstrap Summary');
 
   console.log(`Organization: ${plan.orgSlug}`);
   logger.newline();
 
-  const pipelineGroups = new Map<string, StackDeployment[]>();
+  const pipelineGroups = new Map<string, ConfirmationStack[]>();
   for (const stack of plan.stacks) {
     const existing = pipelineGroups.get(stack.pipelineSlug) || [];
     existing.push(stack);
@@ -62,7 +75,7 @@ export async function confirmDeployment(plan: DeploymentPlan): Promise<boolean> 
   return proceed;
 }
 
-export async function confirmDryRun(plan: DeploymentPlan): Promise<void> {
+export async function confirmDryRun(plan: ConfirmationPlan): Promise<void> {
   logger.header('DevRamps Bootstrap - Dry Run');
 
   console.log(`Organization: ${plan.orgSlug}`);
