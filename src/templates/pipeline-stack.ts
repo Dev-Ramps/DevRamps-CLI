@@ -39,8 +39,9 @@ export interface PipelineStackOptions {
 export function generatePipelineStackTemplate(options: PipelineStackOptions): CloudFormationTemplate {
   const { pipelineSlug, cicdAccountId, dockerArtifacts, bundleArtifacts, stageAccountIds } = options;
 
-  // All accounts that need access (CI/CD + stage accounts, deduplicated)
-  const allAccountIds = [...new Set([cicdAccountId, ...stageAccountIds])];
+  // Cross-account IDs that actually need resource policies (exclude the CI/CD account
+  // which already has access as the resource owner)
+  const crossAccountIds = stageAccountIds.filter(id => id !== cicdAccountId);
 
   const template = createBaseTemplate(`DevRamps Pipeline Stack for ${pipelineSlug}`);
 
@@ -63,8 +64,8 @@ export function generatePipelineStackTemplate(options: PipelineStackOptions): Cl
       ]
     );
 
-    // Add cross-account pull policy for stage accounts
-    if (stageAccountIds.length > 0) {
+    // Add cross-account pull policy when stages are in different accounts
+    if (crossAccountIds.length > 0) {
       template.Resources[resourceId].Properties.RepositoryPolicyText = {
         Version: '2012-10-17',
         Statement: [
@@ -72,7 +73,7 @@ export function generatePipelineStackTemplate(options: PipelineStackOptions): Cl
             Sid: 'AllowStageAccountPull',
             Effect: 'Allow',
             Principal: {
-              AWS: allAccountIds.map(id => `arn:aws:iam::${id}:root`),
+              AWS: crossAccountIds.map(id => `arn:aws:iam::${id}:root`),
             },
             Action: [
               'ecr:GetDownloadUrlForLayer',
@@ -102,8 +103,8 @@ export function generatePipelineStackTemplate(options: PipelineStackOptions): Cl
       ]
     );
 
-    // Add cross-account read policy for stage accounts
-    if (stageAccountIds.length > 0) {
+    // Add cross-account read policy when stages are in different accounts
+    if (crossAccountIds.length > 0) {
       const policyResourceId = sanitizeResourceId(`BucketPolicy${artifactId}`);
       template.Resources[policyResourceId] = {
         Type: 'AWS::S3::BucketPolicy',
@@ -116,7 +117,7 @@ export function generatePipelineStackTemplate(options: PipelineStackOptions): Cl
                 Sid: 'AllowStageAccountRead',
                 Effect: 'Allow',
                 Principal: {
-                  AWS: allAccountIds.map(id => `arn:aws:iam::${id}:root`),
+                  AWS: crossAccountIds.map(id => `arn:aws:iam::${id}:root`),
                 },
                 Action: [
                   's3:GetObject',
@@ -128,7 +129,7 @@ export function generatePipelineStackTemplate(options: PipelineStackOptions): Cl
                 Sid: 'AllowStageAccountList',
                 Effect: 'Allow',
                 Principal: {
-                  AWS: allAccountIds.map(id => `arn:aws:iam::${id}:root`),
+                  AWS: crossAccountIds.map(id => `arn:aws:iam::${id}:root`),
                 },
                 Action: 's3:ListBucket',
                 Resource: `arn:aws:s3:::${bucketName}`,
