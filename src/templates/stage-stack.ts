@@ -13,6 +13,8 @@ import type { CloudFormationTemplate } from '../types/aws.js';
 import type { PipelineStep, IamPolicy } from '../types/pipeline.js';
 import type { DockerArtifact, BundleArtifact } from '../types/artifacts.js';
 import { getStepPermissions, hasPermissions } from '../permissions/index.js';
+import { MIRROR_ECR_PERMISSIONS } from '../permissions/mirror-ecr.js';
+import { MIRROR_S3_PERMISSIONS } from '../permissions/mirror-s3.js';
 import {
   createBaseTemplate,
   buildOidcTrustPolicy,
@@ -78,7 +80,7 @@ export function generateStageStackTemplate(options: StageStackOptions): CloudFor
   // 1. Stage deployment role
   const roleName = generateStageRoleName(pipelineSlug, stageName);
   const trustPolicy = buildStageTrustPolicy(accountId, orgSlug, pipelineSlug, oidcProviderUrl, additionalTrustedAccounts, skipOidc);
-  const policies = buildStagePolicies(steps, additionalPolicies);
+  const policies = buildStagePolicies(steps, additionalPolicies, dockerArtifacts, bundleArtifacts);
 
   template.Resources.StageDeploymentRole = createIamRoleResource(
     roleName,
@@ -207,7 +209,9 @@ function buildStageTrustPolicy(
  */
 function buildStagePolicies(
   steps: PipelineStep[],
-  additionalPolicies: IamPolicy[]
+  additionalPolicies: IamPolicy[],
+  dockerArtifacts: DockerArtifact[],
+  bundleArtifacts: BundleArtifact[]
 ): object[] {
   const policies: object[] = [];
 
@@ -231,6 +235,41 @@ function buildStagePolicies(
       ],
     },
   });
+
+  // Add mirror permissions when artifacts exist (mirroring is an implicit operation)
+  if (dockerArtifacts.length > 0) {
+    policies.push({
+      PolicyName: 'DevRampsMirrorECRPolicy',
+      PolicyDocument: {
+        Version: '2012-10-17',
+        Statement: [
+          {
+            Sid: 'AllowECRMirror',
+            Effect: 'Allow',
+            Action: MIRROR_ECR_PERMISSIONS.actions,
+            Resource: MIRROR_ECR_PERMISSIONS.resources || ['*'],
+          },
+        ],
+      },
+    });
+  }
+
+  if (bundleArtifacts.length > 0) {
+    policies.push({
+      PolicyName: 'DevRampsMirrorS3Policy',
+      PolicyDocument: {
+        Version: '2012-10-17',
+        Statement: [
+          {
+            Sid: 'AllowS3Mirror',
+            Effect: 'Allow',
+            Action: MIRROR_S3_PERMISSIONS.actions,
+            Resource: MIRROR_S3_PERMISSIONS.resources || ['*'],
+          },
+        ],
+      },
+    });
+  }
 
   // Add policy for each step type that has permissions
   for (const step of steps) {
