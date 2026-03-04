@@ -29,6 +29,7 @@ import {
   generateStageRoleName,
   generateStageEcrRepoName,
   generateStageBucketName,
+  generateTerraformStateBucketName,
 } from '../naming/index.js';
 import { getArtifactId } from '../parsers/artifacts.js';
 
@@ -80,7 +81,7 @@ export function generateStageStackTemplate(options: StageStackOptions): CloudFor
   // 1. Stage deployment role
   const roleName = generateStageRoleName(pipelineSlug, stageName);
   const trustPolicy = buildStageTrustPolicy(accountId, orgSlug, pipelineSlug, oidcProviderUrl, additionalTrustedAccounts, skipOidc);
-  const policies = buildStagePolicies(steps, additionalPolicies, dockerArtifacts, bundleArtifacts);
+  const policies = buildStagePolicies(steps, additionalPolicies, dockerArtifacts, bundleArtifacts, orgSlug);
 
   template.Resources.StageDeploymentRole = createIamRoleResource(
     roleName,
@@ -211,7 +212,8 @@ function buildStagePolicies(
   steps: PipelineStep[],
   additionalPolicies: IamPolicy[],
   dockerArtifacts: DockerArtifact[],
-  bundleArtifacts: BundleArtifact[]
+  bundleArtifacts: BundleArtifact[],
+  orgSlug: string
 ): object[] {
   const policies: object[] = [];
 
@@ -231,6 +233,49 @@ function buildStagePolicies(
             'cloudwatch:DescribeAlarms',
           ],
           Resource: '*',
+        },
+      ],
+    },
+  });
+
+  // Terraform state bucket access (for reading and writing TF state)
+  const tfStateBucketName = generateTerraformStateBucketName(orgSlug);
+  policies.push({
+    PolicyName: 'DevRampsTerraformStatePolicy',
+    PolicyDocument: {
+      Version: '2012-10-17',
+      Statement: [
+        {
+          Sid: 'AllowTerraformStateReadWrite',
+          Effect: 'Allow',
+          Action: [
+            's3:GetObject',
+            's3:PutObject',
+            's3:DeleteObject',
+          ],
+          Resource: `arn:aws:s3:::${tfStateBucketName}/*`,
+        },
+        {
+          Sid: 'AllowTerraformStateList',
+          Effect: 'Allow',
+          Action: 's3:ListBucket',
+          Resource: `arn:aws:s3:::${tfStateBucketName}`,
+        },
+        {
+          Sid: 'AllowKMSForTerraformState',
+          Effect: 'Allow',
+          Action: [
+            'kms:Encrypt',
+            'kms:Decrypt',
+            'kms:GenerateDataKey*',
+            'kms:DescribeKey',
+          ],
+          Resource: '*',
+          Condition: {
+            StringLike: {
+              'kms:ViaService': 's3.*.amazonaws.com',
+            },
+          },
         },
       ],
     },
