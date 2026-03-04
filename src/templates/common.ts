@@ -102,12 +102,15 @@ export function buildOidcTrustPolicy(
   accountId: string,
   subject: string,
   oidcProviderUrl?: string,
-  additionalTrustedAccounts?: string[]
+  additionalTrustedAccounts?: string[],
+  skipOidc?: boolean
 ): object {
   const providerUrl = oidcProviderUrl || OIDC_PROVIDER_URL;
 
-  const statements: object[] = [
-    {
+  const statements: object[] = [];
+
+  if (!skipOidc) {
+    statements.push({
       Effect: 'Allow',
       Principal: {
         Federated: `arn:aws:iam::${accountId}:oidc-provider/${providerUrl}`,
@@ -119,8 +122,8 @@ export function buildOidcTrustPolicy(
           [`${providerUrl}:aud`]: 'sts.amazonaws.com',
         },
       },
-    },
-  ];
+    });
+  }
 
   if (additionalTrustedAccounts && additionalTrustedAccounts.length > 0) {
     statements.push({

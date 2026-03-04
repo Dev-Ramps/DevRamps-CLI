@@ -29,13 +29,15 @@ export interface ImportStackOptions {
   oidcProviderUrl?: string;
   /** Additional AWS account IDs to add to role trust policies (for local dev testing) */
   additionalTrustedAccounts?: string[];
+  /** Skip OIDC federation in trust policies (for localhost testing) */
+  skipOidc?: boolean;
 }
 
 /**
  * Generate the CloudFormation template for an import stack
  */
 export function generateImportStackTemplate(options: ImportStackOptions): CloudFormationTemplate {
-  const { pipelineSlug, orgSlug, accountId, oidcProviderUrl, additionalTrustedAccounts } = options;
+  const { pipelineSlug, orgSlug, accountId, oidcProviderUrl, additionalTrustedAccounts, skipOidc } = options;
 
   const template = createBaseTemplate(
     `DevRamps Import Stack for ${pipelineSlug} - grants read access for artifact imports`
@@ -43,7 +45,7 @@ export function generateImportStackTemplate(options: ImportStackOptions): CloudF
 
   // Import role with OIDC trust for CI/CD operations
   const roleName = generateImportRoleName(pipelineSlug);
-  const trustPolicy = buildOidcTrustPolicy(accountId, `org:${orgSlug}/cicd`, oidcProviderUrl, additionalTrustedAccounts);
+  const trustPolicy = buildOidcTrustPolicy(accountId, `org:${orgSlug}/cicd`, oidcProviderUrl, additionalTrustedAccounts, skipOidc);
   const policies = buildImportRolePolicies();
 
   template.Resources.ImportRole = createIamRoleResource(

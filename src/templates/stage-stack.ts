@@ -47,6 +47,8 @@ export interface StageStackOptions {
   oidcProviderUrl?: string;
   /** Additional AWS account IDs to add to role trust policies (for local dev testing) */
   additionalTrustedAccounts?: string[];
+  /** Skip OIDC federation in trust policies (for localhost testing) */
+  skipOidc?: boolean;
 }
 
 /**
@@ -64,6 +66,7 @@ export function generateStageStackTemplate(options: StageStackOptions): CloudFor
     bundleArtifacts,
     oidcProviderUrl,
     additionalTrustedAccounts,
+    skipOidc,
   } = options;
 
   const template = createBaseTemplate(
@@ -74,7 +77,7 @@ export function generateStageStackTemplate(options: StageStackOptions): CloudFor
 
   // 1. Stage deployment role
   const roleName = generateStageRoleName(pipelineSlug, stageName);
-  const trustPolicy = buildStageTrustPolicy(accountId, orgSlug, pipelineSlug, oidcProviderUrl, additionalTrustedAccounts);
+  const trustPolicy = buildStageTrustPolicy(accountId, orgSlug, pipelineSlug, oidcProviderUrl, additionalTrustedAccounts, skipOidc);
   const policies = buildStagePolicies(steps, additionalPolicies);
 
   template.Resources.StageDeploymentRole = createIamRoleResource(
@@ -131,10 +134,6 @@ export function generateStageStackTemplate(options: StageStackOptions): CloudFor
   }
 
   // Outputs
-  // Note: OIDC provider ARN is constructed manually (provider created by Account Bootstrap stack)
-  const providerUrl = oidcProviderUrl || OIDC_PROVIDER_URL;
-  const oidcProviderArn = `arn:aws:iam::${accountId}:oidc-provider/${providerUrl}`;
-
   template.Outputs = {
     StageRoleArn: {
       Description: 'ARN of the stage deployment role',
@@ -145,10 +144,6 @@ export function generateStageStackTemplate(options: StageStackOptions): CloudFor
       Description: 'Name of the stage deployment role',
       Value: { Ref: 'StageDeploymentRole' },
     },
-    OIDCProviderArn: {
-      Description: 'ARN of the OIDC provider (created by Account Bootstrap stack)',
-      Value: oidcProviderArn,
-    },
     PipelineSlug: {
       Description: 'Pipeline slug',
       Value: pipelineSlug,
@@ -158,6 +153,14 @@ export function generateStageStackTemplate(options: StageStackOptions): CloudFor
       Value: stageName,
     },
   };
+
+  if (!skipOidc) {
+    const providerUrl = oidcProviderUrl || OIDC_PROVIDER_URL;
+    template.Outputs!.OIDCProviderArn = {
+      Description: 'ARN of the OIDC provider (created by Account Bootstrap stack)',
+      Value: `arn:aws:iam::${accountId}:oidc-provider/${providerUrl}`,
+    };
+  }
 
   // Add ECR outputs
   for (const [artifactName, { resourceId }] of Object.entries(ecrOutputs)) {
@@ -191,10 +194,11 @@ function buildStageTrustPolicy(
   orgSlug: string,
   pipelineSlug: string,
   oidcProviderUrl?: string,
-  additionalTrustedAccounts?: string[]
+  additionalTrustedAccounts?: string[],
+  skipOidc?: boolean
 ): object {
   const subject = `org:${orgSlug}/pipeline:${pipelineSlug}`;
-  return buildOidcTrustPolicy(accountId, subject, oidcProviderUrl, additionalTrustedAccounts);
+  return buildOidcTrustPolicy(accountId, subject, oidcProviderUrl, additionalTrustedAccounts, skipOidc);
 }
 
 /**

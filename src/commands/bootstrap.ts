@@ -55,6 +55,19 @@ function getOidcProviderUrlFromEndpoint(endpointOverride?: string): string | und
   }
 }
 
+/**
+ * Check if the endpoint override points to localhost
+ */
+function isLocalhostEndpoint(endpointOverride?: string): boolean {
+  if (!endpointOverride) return false;
+  try {
+    const url = new URL(endpointOverride);
+    return url.hostname === 'localhost' || url.hostname === '127.0.0.1';
+  } catch {
+    return false;
+  }
+}
+
 export async function bootstrapCommand(options: BootstrapOptions): Promise<void> {
   try {
     if (options.verbose) {
@@ -133,7 +146,11 @@ export async function bootstrapCommand(options: BootstrapOptions): Promise<void>
     const additionalTrustedAccounts = options.additionalTrustedAccounts
       ? options.additionalTrustedAccounts.split(',').map(s => s.trim())
       : undefined;
-    await executeDeployment(plan, pipelines, pipelineArtifacts, authData, identity.accountId, options, oidcProviderUrl, additionalTrustedAccounts);
+    const skipOidc = isLocalhostEndpoint(options.endpointOverride);
+    if (skipOidc) {
+      logger.info('Localhost endpoint detected — OIDC provider creation will be skipped');
+    }
+    await executeDeployment(plan, pipelines, pipelineArtifacts, authData, identity.accountId, options, oidcProviderUrl, additionalTrustedAccounts, skipOidc);
 
   } catch (error) {
     if (error instanceof DevRampsError) {
@@ -495,59 +512,65 @@ async function executeDeployment(
   currentAccountId: string,
   options: BootstrapOptions,
   oidcProviderUrl?: string,
-  additionalTrustedAccounts?: string[]
+  additionalTrustedAccounts?: string[],
+  skipOidc?: boolean
 ): Promise<void> {
   const results = { success: 0, failed: 0 };
 
   const remainingStacks = 1 + plan.pipelineStacks.length + plan.stageStacks.length + plan.importStacks.length;
 
-  // Phase 1: Deploy all Account bootstrap stacks first
-  logger.newline();
-  logger.header('Phase 1: Deploying Account Bootstrap Stacks');
-  logger.info(`Deploying ${plan.accountStacks.length} account stack(s) in parallel...`);
-  logger.newline();
-
-  const accountProgress = getMultiStackProgress();
-  for (const stack of plan.accountStacks) {
-    accountProgress.addStack(stack.stackName, 'account', stack.accountId, stack.region, 1);
-  }
-  accountProgress.start();
-
-  const accountResults = await Promise.all(
-    plan.accountStacks.map(async (stack) => {
-      try {
-        await deployAccountStack(stack, currentAccountId, options, oidcProviderUrl);
-        return { stack: `${stack.stackName} (${stack.accountId})`, success: true };
-      } catch (error) {
-        return {
-          stack: `${stack.stackName} (${stack.accountId})`,
-          success: false,
-          error: error instanceof Error ? error.message : String(error),
-        };
-      }
-    })
-  );
-
-  clearMultiStackProgress();
-
-  // Report account stack results
-  logger.newline();
-  for (const result of accountResults) {
-    if (result.success) {
-      logger.success(`${result.stack} deployed`);
-      results.success++;
-    } else {
-      logger.error(`${result.stack} failed: ${result.error}`);
-      results.failed++;
-    }
-  }
-
-  // If any account stack failed, abort before deploying remaining stacks
-  if (results.failed > 0) {
+  // Phase 1: Deploy all Account bootstrap stacks first (creates OIDC providers)
+  if (skipOidc) {
     logger.newline();
-    logger.header('Deployment Summary');
-    logger.error(`${results.failed} account stack(s) failed. Skipping remaining ${remainingStacks} stack(s).`);
-    process.exit(1);
+    logger.header('Phase 1: Skipping Account Bootstrap Stacks (localhost endpoint, OIDC not needed)');
+  } else {
+    logger.newline();
+    logger.header('Phase 1: Deploying Account Bootstrap Stacks');
+    logger.info(`Deploying ${plan.accountStacks.length} account stack(s) in parallel...`);
+    logger.newline();
+
+    const accountProgress = getMultiStackProgress();
+    for (const stack of plan.accountStacks) {
+      accountProgress.addStack(stack.stackName, 'account', stack.accountId, stack.region, 1);
+    }
+    accountProgress.start();
+
+    const accountResults = await Promise.all(
+      plan.accountStacks.map(async (stack) => {
+        try {
+          await deployAccountStack(stack, currentAccountId, options, oidcProviderUrl);
+          return { stack: `${stack.stackName} (${stack.accountId})`, success: true };
+        } catch (error) {
+          return {
+            stack: `${stack.stackName} (${stack.accountId})`,
+            success: false,
+            error: error instanceof Error ? error.message : String(error),
+          };
+        }
+      })
+    );
+
+    clearMultiStackProgress();
+
+    // Report account stack results
+    logger.newline();
+    for (const result of accountResults) {
+      if (result.success) {
+        logger.success(`${result.stack} deployed`);
+        results.success++;
+      } else {
+        logger.error(`${result.stack} failed: ${result.error}`);
+        results.failed++;
+      }
+    }
+
+    // If any account stack failed, abort before deploying remaining stacks
+    if (results.failed > 0) {
+      logger.newline();
+      logger.header('Deployment Summary');
+      logger.error(`${results.failed} account stack(s) failed. Skipping remaining ${remainingStacks} stack(s).`);
+      process.exit(1);
+    }
   }
 
   // Phase 2: Deploy all other stacks in parallel
@@ -573,7 +596,7 @@ async function executeDeployment(
 
   const orgPromise = (async () => {
     try {
-      await deployOrgStack(plan, pipelines, authData, currentAccountId, options, oidcProviderUrl, additionalTrustedAccounts);
+      await deployOrgStack(plan, pipelines, authData, currentAccountId, options, oidcProviderUrl, additionalTrustedAccounts, skipOidc);
       return { stack: plan.orgStack.stackName, success: true };
     } catch (error) {
       return {
@@ -599,7 +622,7 @@ async function executeDeployment(
 
   const stagePromises = plan.stageStacks.map(async (stack) => {
     try {
-      await deployStageStack(stack, authData, currentAccountId, options, oidcProviderUrl, additionalTrustedAccounts);
+      await deployStageStack(stack, authData, currentAccountId, options, oidcProviderUrl, additionalTrustedAccounts, skipOidc);
       return { stack: stack.stackName, success: true };
     } catch (error) {
       return {
@@ -612,7 +635,7 @@ async function executeDeployment(
 
   const importPromises = plan.importStacks.map(async (stack) => {
     try {
-      await deployImportStack(stack, currentAccountId, options, oidcProviderUrl, additionalTrustedAccounts);
+      await deployImportStack(stack, currentAccountId, options, oidcProviderUrl, additionalTrustedAccounts, skipOidc);
       return { stack: `${stack.stackName} (${stack.accountId})`, success: true };
     } catch (error) {
       return {
@@ -667,7 +690,8 @@ async function deployOrgStack(
   currentAccountId: string,
   options: BootstrapOptions,
   oidcProviderUrl?: string,
-  additionalTrustedAccounts?: string[]
+  additionalTrustedAccounts?: string[],
+  skipOidc?: boolean
 ): Promise<void> {
   const { orgSlug, cicdAccountId, cicdRegion } = authData;
 
@@ -714,6 +738,7 @@ async function deployOrgStack(
     targetAccountIds,
     oidcProviderUrl,
     additionalTrustedAccounts,
+    skipOidc,
   });
 
   const deployOptions = {
@@ -819,7 +844,8 @@ async function deployStageStack(
   currentAccountId: string,
   options: BootstrapOptions,
   oidcProviderUrl?: string,
-  additionalTrustedAccounts?: string[]
+  additionalTrustedAccounts?: string[],
+  skipOidc?: boolean
 ): Promise<void> {
   // Get credentials for stage account
   const credentials = stack.accountId !== currentAccountId
@@ -844,6 +870,7 @@ async function deployStageStack(
     bundleArtifacts: stack.bundleArtifacts,
     oidcProviderUrl,
     additionalTrustedAccounts,
+    skipOidc,
   });
 
   const deployOptions = {
@@ -869,7 +896,8 @@ async function deployImportStack(
   currentAccountId: string,
   options: BootstrapOptions,
   oidcProviderUrl?: string,
-  additionalTrustedAccounts?: string[]
+  additionalTrustedAccounts?: string[],
+  skipOidc?: boolean
 ): Promise<void> {
   // Get credentials for the import source account
   const credentials = stack.accountId !== currentAccountId
@@ -887,6 +915,7 @@ async function deployImportStack(
     accountId: stack.accountId,
     oidcProviderUrl,
     additionalTrustedAccounts,
+    skipOidc,
   });
 
   const deployOptions = {
