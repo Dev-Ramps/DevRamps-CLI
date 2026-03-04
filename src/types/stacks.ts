@@ -46,6 +46,8 @@ export interface PipelineStackDeployment extends BaseStackDeployment {
   dockerArtifacts: DockerArtifact[];
   /** Bundle artifacts that need root S3 buckets (per_stage: false or unset) */
   bundleArtifacts: BundleArtifact[];
+  /** Target stage account IDs that need cross-account access to global artifacts */
+  stageAccountIds: string[];
 }
 
 /**

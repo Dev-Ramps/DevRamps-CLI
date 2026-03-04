@@ -29,13 +29,18 @@ export interface PipelineStackOptions {
   dockerArtifacts: DockerArtifact[];
   /** Bundle artifacts (non per_stage only) */
   bundleArtifacts: BundleArtifact[];
+  /** Target stage account IDs that need cross-account access to global artifacts */
+  stageAccountIds: string[];
 }
 
 /**
  * Generate the CloudFormation template for a pipeline stack
  */
 export function generatePipelineStackTemplate(options: PipelineStackOptions): CloudFormationTemplate {
-  const { pipelineSlug, cicdAccountId, dockerArtifacts, bundleArtifacts } = options;
+  const { pipelineSlug, cicdAccountId, dockerArtifacts, bundleArtifacts, stageAccountIds } = options;
+
+  // All accounts that need access (CI/CD + stage accounts, deduplicated)
+  const allAccountIds = [...new Set([cicdAccountId, ...stageAccountIds])];
 
   const template = createBaseTemplate(`DevRamps Pipeline Stack for ${pipelineSlug}`);
 
@@ -58,6 +63,27 @@ export function generatePipelineStackTemplate(options: PipelineStackOptions): Cl
       ]
     );
 
+    // Add cross-account pull policy for stage accounts
+    if (stageAccountIds.length > 0) {
+      template.Resources[resourceId].Properties.RepositoryPolicyText = {
+        Version: '2012-10-17',
+        Statement: [
+          {
+            Sid: 'AllowStageAccountPull',
+            Effect: 'Allow',
+            Principal: {
+              AWS: allAccountIds.map(id => `arn:aws:iam::${id}:root`),
+            },
+            Action: [
+              'ecr:GetDownloadUrlForLayer',
+              'ecr:BatchGetImage',
+              'ecr:BatchCheckLayerAvailability',
+            ],
+          },
+        ],
+      };
+    }
+
     ecrOutputs[artifact.name] = { repoName, resourceId };
   }
 
@@ -75,6 +101,43 @@ export function generatePipelineStackTemplate(options: PipelineStackOptions): Cl
         { Key: 'ArtifactType', Value: artifact.type },
       ]
     );
+
+    // Add cross-account read policy for stage accounts
+    if (stageAccountIds.length > 0) {
+      const policyResourceId = sanitizeResourceId(`BucketPolicy${artifactId}`);
+      template.Resources[policyResourceId] = {
+        Type: 'AWS::S3::BucketPolicy',
+        Properties: {
+          Bucket: { Ref: resourceId },
+          PolicyDocument: {
+            Version: '2012-10-17',
+            Statement: [
+              {
+                Sid: 'AllowStageAccountRead',
+                Effect: 'Allow',
+                Principal: {
+                  AWS: allAccountIds.map(id => `arn:aws:iam::${id}:root`),
+                },
+                Action: [
+                  's3:GetObject',
+                  's3:HeadObject',
+                ],
+                Resource: `arn:aws:s3:::${bucketName}/*`,
+              },
+              {
+                Sid: 'AllowStageAccountList',
+                Effect: 'Allow',
+                Principal: {
+                  AWS: allAccountIds.map(id => `arn:aws:iam::${id}:root`),
+                },
+                Action: 's3:ListBucket',
+                Resource: `arn:aws:s3:::${bucketName}`,
+              },
+            ],
+          },
+        },
+      };
+    }
 
     s3Outputs[artifact.name] = { bucketName, resourceId };
   }

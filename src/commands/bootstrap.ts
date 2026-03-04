@@ -229,6 +229,7 @@ async function buildDeploymentPlan(
       pipelineSlug: pipeline.slug,
       dockerArtifacts: filteredArtifacts.docker,
       bundleArtifacts: filteredArtifacts.bundle,
+      stageAccountIds: pipeline.targetAccountIds,
     });
   }
 
@@ -782,6 +783,7 @@ async function deployPipelineStack(
     cicdAccountId,
     dockerArtifacts: stack.dockerArtifacts,
     bundleArtifacts: stack.bundleArtifacts,
+    stageAccountIds: stack.stageAccountIds,
   });
 
   const deployOptions = {
