@@ -114,6 +114,24 @@ export function generateStageStackTemplate(options: StageStackOptions): CloudFor
       ]
     );
 
+    // Allow Lambda to pull images from this repository
+    template.Resources[resourceId].Properties.RepositoryPolicyText = {
+      Version: '2012-10-17',
+      Statement: [
+        {
+          Sid: 'AllowLambdaPull',
+          Effect: 'Allow',
+          Principal: {
+            Service: 'lambda.amazonaws.com',
+          },
+          Action: [
+            'ecr:GetDownloadUrlForLayer',
+            'ecr:BatchGetImage',
+          ],
+        },
+      ],
+    };
+
     ecrOutputs[artifact.name] = { resourceId };
   }
 
