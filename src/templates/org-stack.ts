@@ -238,6 +238,12 @@ function buildOrgRolePolicies(orgSlug: string): object[] {
             Resource: '*',
           },
           {
+            Sid: 'AllowEventBridgePutEvents',
+            Effect: 'Allow',
+            Action: 'events:PutEvents',
+            Resource: '*',
+          },
+          {
             Sid: 'AllowSecretsManagerOperations',
             Effect: 'Allow',
             Action: [

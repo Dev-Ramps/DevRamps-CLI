@@ -256,24 +256,6 @@ function buildStagePolicies(
     },
   });
 
-  // EventBridge integration policy (allows forwarding pipeline events to customer event bus)
-  policies.push({
-    PolicyName: 'DevRampsEventBridgePolicy',
-    PolicyDocument: {
-      Version: '2012-10-17',
-      Statement: [
-        {
-          Sid: 'AllowEventBridgePutEvents',
-          Effect: 'Allow',
-          Action: [
-            'events:PutEvents',
-          ],
-          Resource: '*',
-        },
-      ],
-    },
-  });
-
   // Terraform state bucket access (for reading and writing TF state)
   const tfStateBucketName = generateTerraformStateBucketName(orgSlug);
   policies.push({
