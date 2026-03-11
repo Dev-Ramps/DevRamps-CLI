@@ -8,7 +8,7 @@ import { parse as parseYaml } from 'yaml';
 import { NoDevrampsFolderError, PipelineParseError } from '../utils/errors.js';
 import * as logger from '../utils/logger.js';
 import { parseAdditionalPolicies } from './additional-policies.js';
-import type { PipelineDefinition, ParsedPipeline, PipelineStep, IamPolicy, Stage } from '../types/pipeline.js';
+import type { PipelineDefinition, ParsedPipeline, PipelineStep, IamPolicy, Stage, EphemeralEnvironmentDef } from '../types/pipeline.js';
 
 const DEVRAMPS_FOLDER = '.devramps';
 const PIPELINE_FILE = 'pipeline.yaml';
@@ -87,7 +87,7 @@ export async function parsePipeline(
     throw new PipelineParseError(slug, 'Pipeline must have at least one stage');
   }
 
-  // Validate stages have required fields (new structure)
+  // Validate stages have required fields
   for (const stage of definition.pipeline.stages) {
     if (!stage.account_id) {
       throw new PipelineParseError(slug, `Stage "${stage.name}" is missing account_id`);
@@ -97,7 +97,19 @@ export async function parsePipeline(
     }
   }
 
-  // Extract unique account IDs from stages
+  // Validate ephemeral environments have required fields
+  if (definition.pipeline.ephemeral_environments) {
+    for (const [name, env] of Object.entries(definition.pipeline.ephemeral_environments)) {
+      if (!env.account_id) {
+        throw new PipelineParseError(slug, `Ephemeral environment "${name}" is missing account_id`);
+      }
+      if (!env.region) {
+        throw new PipelineParseError(slug, `Ephemeral environment "${name}" is missing region`);
+      }
+    }
+  }
+
+  // Extract unique account IDs from stages and ephemeral environments
   const targetAccountIds = extractTargetAccountIds(definition);
 
   // Extract steps from pipeline level
@@ -106,13 +118,21 @@ export async function parsePipeline(
   // Parse additional IAM policies if present
   const additionalPolicies = await parseAdditionalPoliciesForPipeline(basePath, slug);
 
-  logger.verbose(`Pipeline ${slug}: ${targetAccountIds.length} accounts, ${steps.length} steps`);
+  // Combine regular stages with ephemeral environments (which need the same stage stacks)
+  const ephemeralStages = ephemeralEnvironmentsAsStages(definition);
+  const allStages = [...definition.pipeline.stages, ...ephemeralStages];
+
+  if (ephemeralStages.length > 0) {
+    logger.verbose(`Pipeline ${slug}: ${ephemeralStages.length} ephemeral environment(s) will be bootstrapped as stages`);
+  }
+
+  logger.verbose(`Pipeline ${slug}: ${targetAccountIds.length} accounts, ${allStages.length} stages, ${steps.length} steps`);
 
   return {
     slug,
     definition,
     targetAccountIds,
-    stages: definition.pipeline.stages,
+    stages: allStages,
     steps,
     additionalPolicies,
   };
@@ -122,13 +142,41 @@ function extractTargetAccountIds(definition: PipelineDefinition): string[] {
   const accountIds = new Set<string>();
 
   for (const stage of definition.pipeline.stages) {
-    // New structure: account_id is directly on the stage
     if (stage.account_id) {
       accountIds.add(stage.account_id);
     }
   }
 
+  // Include ephemeral environment accounts
+  if (definition.pipeline.ephemeral_environments) {
+    for (const env of Object.values(definition.pipeline.ephemeral_environments)) {
+      if (env.account_id) {
+        accountIds.add(env.account_id);
+      }
+    }
+  }
+
   return Array.from(accountIds);
+}
+
+/**
+ * Convert ephemeral environment definitions to Stage objects for bootstrapping.
+ * Ephemeral environments need the same stage stack resources (deployment role,
+ * mirrored ECR/S3) as regular stages.
+ */
+function ephemeralEnvironmentsAsStages(
+  definition: PipelineDefinition
+): Stage[] {
+  const envs = definition.pipeline.ephemeral_environments;
+  if (!envs) return [];
+
+  return Object.entries(envs).map(([name, env]: [string, EphemeralEnvironmentDef]) => ({
+    name: `ephemeral-${name}`,
+    account_id: env.account_id,
+    region: env.region,
+    skip: env.skip,
+    vars: env.vars,
+  }));
 }
 
 function extractSteps(definition: PipelineDefinition): PipelineStep[] {

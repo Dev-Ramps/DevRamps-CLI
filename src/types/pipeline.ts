@@ -70,6 +70,19 @@ export interface StageDefaults {
 }
 
 /**
+ * Ephemeral environment definition from pipeline.yaml
+ */
+export interface EphemeralEnvironmentDef {
+  triggers: { on: string; target_branches?: string[] }[];
+  release: { on: string; after_idle_hours?: number }[];
+  on_release: string;
+  account_id: string;
+  region: string;
+  vars?: Record<string, unknown>;
+  skip?: string[];
+}
+
+/**
  * Pipeline configuration within pipeline.yaml
  */
 export interface PipelineConfig {
@@ -85,6 +98,8 @@ export interface PipelineConfig {
   steps: PipelineStep[];
   /** Build artifacts (Docker images, bundles) - keyed by artifact name */
   artifacts?: Record<string, RawArtifact>;
+  /** Ephemeral environments - keyed by environment name */
+  ephemeral_environments?: Record<string, EphemeralEnvironmentDef>;
 }
 
 /**
