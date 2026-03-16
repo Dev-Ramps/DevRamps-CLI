@@ -9,6 +9,7 @@
  * 5. Import Stacks - One per pipeline per import source account (import role for reading external artifacts)
  */
 
+import { createHash } from 'node:crypto';
 import ora from 'ora';
 import { getCurrentIdentity } from '../aws/credentials.js';
 import { assumeRoleForAccount } from '../aws/assume-role.js';
@@ -674,6 +675,10 @@ async function executeDeployment(
 
   if (results.failed === 0) {
     logger.success(`All ${results.success} stack(s) deployed successfully!`);
+
+    // Notify the backend that bootstrapped pipelines are up to date
+    await markPipelinesBootstrapped(pipelines, authData);
+
     process.exit(0);
   } else {
     logger.warn(`${results.success} stack(s) succeeded, ${results.failed} stack(s) failed.`);
@@ -933,4 +938,88 @@ async function deployImportStack(
 
   // Deploy
   await deployStack(deployOptions);
+}
+
+/**
+ * After a successful bootstrap, notify the backend that each pipeline
+ * has been bootstrapped with its current definition hash. This enables
+ * the UI to show whether a pipeline's infrastructure is up to date.
+ */
+async function markPipelinesBootstrapped(
+  pipelines: ParsedPipeline[],
+  authData: AuthData
+): Promise<void> {
+  logger.newline();
+  const spinner = ora('Registering bootstrap status...').start();
+
+  // Fetch all pipelines once to map slug -> id
+  let pipelineMap: Map<string, string>;
+  try {
+    const listUrl = `${authData.apiBaseUrl}/api/v1/organizations/${authData.organizationId}/pipelines?limit=100`;
+    const listRes = await fetch(listUrl, {
+      headers: {
+        Authorization: `Bearer ${authData.accessToken}`,
+        Accept: 'application/json',
+      },
+    });
+
+    if (!listRes.ok) {
+      spinner.warn(`Could not register bootstrap status: failed to list pipelines (${listRes.status})`);
+      return;
+    }
+
+    const listData = await listRes.json() as { pipelines: { id: string; slug: string }[] };
+    pipelineMap = new Map(listData.pipelines.map(p => [p.slug, p.id]));
+  } catch (error) {
+    spinner.warn(`Could not register bootstrap status: ${error instanceof Error ? error.message : String(error)}`);
+    return;
+  }
+
+  let succeeded = 0;
+  let failed = 0;
+
+  for (const pipeline of pipelines) {
+    const pipelineId = pipelineMap.get(pipeline.slug);
+    if (!pipelineId) {
+      logger.verbose(`Pipeline ${pipeline.slug} not found in backend — skipping mark-bootstrapped`);
+      failed++;
+      continue;
+    }
+
+    const definitionHash = createHash('sha256')
+      .update(JSON.stringify(pipeline.definition))
+      .digest('hex');
+
+    try {
+      const url = `${authData.apiBaseUrl}/api/v1/organizations/${authData.organizationId}/pipelines/${pipelineId}/mark-bootstrapped`;
+      const res = await fetch(url, {
+        method: 'POST',
+        headers: {
+          Authorization: `Bearer ${authData.accessToken}`,
+          'Content-Type': 'application/json',
+          Accept: 'application/json',
+        },
+        body: JSON.stringify({ definitionHash }),
+      });
+
+      if (res.ok) {
+        logger.verbose(`Marked ${pipeline.slug} as bootstrapped (hash: ${definitionHash.slice(0, 12)}...)`);
+        succeeded++;
+      } else {
+        logger.verbose(`Failed to mark ${pipeline.slug} as bootstrapped: ${res.status}`);
+        failed++;
+      }
+    } catch (error) {
+      logger.verbose(`Error marking ${pipeline.slug} as bootstrapped: ${error instanceof Error ? error.message : String(error)}`);
+      failed++;
+    }
+  }
+
+  if (failed === 0) {
+    spinner.succeed(`Bootstrap status registered for ${succeeded} pipeline(s)`);
+  } else if (succeeded > 0) {
+    spinner.warn(`Bootstrap status registered for ${succeeded} pipeline(s), ${failed} failed (non-fatal)`);
+  } else {
+    spinner.warn('Could not register bootstrap status (non-fatal)');
+  }
 }

@@ -13,8 +13,11 @@ export interface BootstrapOptions {
 
 export interface AuthData {
   orgSlug: string;
+  organizationId: string;
   cicdAccountId: string;
   cicdRegion: string;
+  accessToken: string;
+  apiBaseUrl: string;
 }
 
 /**

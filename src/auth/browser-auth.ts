@@ -168,8 +168,11 @@ export async function authenticateViaBrowser(options: AuthOptions = {}): Promise
 
     return {
       orgSlug: orgResponse.slug,
+      organizationId: tokenResponse.organization_id,
       cicdAccountId: cicdAccountId,
       cicdRegion: awsConfig.defaultRegion,
+      accessToken: tokenResponse.access_token,
+      apiBaseUrl: baseUrl,
     };
   } finally {
     process.removeListener('SIGINT', sigintHandler);
