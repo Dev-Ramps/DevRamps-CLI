@@ -338,7 +338,11 @@ async function waitForStackWithProgress(
           return; // Success!
         }
         // Any terminal state that isn't SUCCESS is a failure
-        throw new Error(`Stack operation failed with status: ${currentStatus}`);
+        // Include the actual failure reason so the user knows what went wrong
+        const errorDetail = latestFailureReason
+          ? `Stack ${stackName} failed: ${latestFailureReason}`
+          : `Stack ${stackName} failed with status: ${currentStatus}`;
+        throw new Error(errorDetail);
       }
 
       // Wait before polling again

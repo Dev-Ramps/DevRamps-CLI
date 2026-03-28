@@ -273,7 +273,7 @@ export class MultiStackProgress {
     }
 
     // Progress bar
-    const percentage = total > 0 ? completed / total : 0;
+    const percentage = total > 0 ? Math.min(completed / total, 1) : 0;
     const filled = Math.round(this.barWidth * percentage);
     const empty = this.barWidth - filled;
     const bar = '█'.repeat(filled) + '░'.repeat(empty);
