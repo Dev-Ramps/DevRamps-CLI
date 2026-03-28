@@ -119,10 +119,7 @@ export function generatePipelineStackTemplate(options: PipelineStackOptions): Cl
                 Principal: {
                   AWS: crossAccountIds.map(id => `arn:aws:iam::${id}:root`),
                 },
-                Action: [
-                  's3:GetObject',
-                  's3:HeadObject',
-                ],
+                Action: 's3:GetObject',
                 Resource: `arn:aws:s3:::${bucketName}/*`,
               },
               {
