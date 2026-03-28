@@ -8,6 +8,7 @@
 
 import { program } from 'commander';
 import { bootstrapCommand } from './commands/bootstrap.js';
+import { initAgentCommand } from './commands/init-agent.js';
 
 program
   .name('devramps')
@@ -42,5 +43,11 @@ program
     'Comma-separated AWS account IDs to add to role trust policies (for local dev testing)'
   )
   .action(bootstrapCommand);
+
+program
+  .command('init-agent')
+  .description('Set up AI agent integration (MCP server + CLAUDE.md) for this project')
+  .option('-y, --yes', 'Skip confirmation prompt')
+  .action(initAgentCommand);
 
 program.parse();
