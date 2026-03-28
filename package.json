@@ -1,6 +1,6 @@
 {
   "name": "@devramps/cli",
-  "version": "0.1.32",
+  "version": "0.1.33",
   "description": "DevRamps CLI - Bootstrap AWS infrastructure for CI/CD pipelines",
   "main": "dist/index.js",
   "bin": {
