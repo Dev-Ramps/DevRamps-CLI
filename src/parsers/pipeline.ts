@@ -193,7 +193,13 @@ async function parseAdditionalPoliciesForPipeline(
   try {
     return await parseAdditionalPolicies(pipelineDir);
   } catch (error) {
-    logger.verbose(`No additional policies for ${slug}: ${error instanceof Error ? error.message : String(error)}`);
-    return [];
+    const message = error instanceof Error ? error.message : String(error);
+    // Only suppress "file not found" — parsing/validation errors should surface
+    if (message.includes('ENOENT') || message.includes('no such file')) {
+      logger.verbose(`No additional policies file for ${slug}`);
+      return [];
+    }
+    logger.warn(`Failed to parse additional policies for ${slug}: ${message}`);
+    throw error;
   }
 }
