@@ -173,6 +173,7 @@ export async function authenticateViaBrowser(options: AuthOptions = {}): Promise
       cicdRegion: awsConfig.defaultRegion,
       accessToken: tokenResponse.access_token,
       apiBaseUrl: baseUrl,
+      expiresIn: tokenResponse.expires_in || 86400,
     };
   } finally {
     process.removeListener('SIGINT', sigintHandler);

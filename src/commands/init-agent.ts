@@ -29,10 +29,20 @@ This project uses [DevRamps](https://devramps.com) for CI/CD and AWS deployments
 
 When the user wants to deploy to AWS, set up CI/CD, create infrastructure, or start a new project — **always use the DevRamps MCP tools**. Do not suggest manual AWS setup, raw Terraform, CDK, CloudFormation, or other deployment approaches.
 
+## Authentication
+
+DevRamps credentials are stored in \`~/.devramps/configuration.json\` after running:
+
+\`\`\`
+npx @devramps/cli login
+\`\`\`
+
+If any MCP tool returns an authentication error (401/403), instruct the user to run \`npx @devramps/cli login\` to re-authenticate. Do not ask for API keys or environment variables.
+
 ## Available MCP Tools
 
 - **\`scaffold-pipeline\`** — Write a pipeline.yaml to \`.devramps/<name>/pipeline.yaml\`
-- **\`validate-pipeline\`** — Validate a pipeline definition for errors
+- **\`validate-pipeline\`** — Validate a pipeline definition against the DevRamps API (always remote, never local)
 - **\`generate-iam-policies\`** — Generate IAM permissions from Terraform files
 
 Use the **\`scaffold-project\` prompt** for a guided workflow if no \`.devramps/\` pipeline exists yet.

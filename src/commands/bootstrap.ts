@@ -15,6 +15,7 @@ import { getCurrentIdentity } from '../aws/credentials.js';
 import { assumeRoleForAccount } from '../aws/assume-role.js';
 import { deployStack, getStackStatus, readExistingStack, previewStackChanges } from '../aws/cloudformation.js';
 import { authenticateViaBrowser } from '../auth/browser-auth.js';
+import { loadCredentials, saveCredentials } from '../auth/credential-store.js';
 import { findDevrampsPipelines, parsePipeline } from '../parsers/pipeline.js';
 import { parseArtifacts, filterArtifactsForPipelineStack, extractImportSourceAccounts } from '../parsers/artifacts.js';
 import { generateOrgStackTemplate, getOrgStackName } from '../templates/org-stack.js';
@@ -82,10 +83,16 @@ export async function bootstrapCommand(options: BootstrapOptions): Promise<void>
     const identity = await getCurrentIdentity();
     spinner.succeed(`Authenticated as ${identity.arn}`);
 
-    // Step 2: Authenticate with DevRamps
-    const authData = await authenticateViaBrowser({
-      endpointOverride: options.endpointOverride,
-    });
+    // Step 2: Authenticate with DevRamps (use stored credentials if available)
+    let authData = options.endpointOverride ? null : await loadCredentials();
+    if (authData) {
+      logger.info(`Using stored credentials for ${authData.orgSlug}`);
+    } else {
+      authData = await authenticateViaBrowser({
+        endpointOverride: options.endpointOverride,
+      });
+      await saveCredentials(authData, authData.expiresIn);
+    }
 
     // Step 3: Find and parse ALL pipelines (needed for org stack bucket policy merge)
     spinner.start('Finding pipelines...');

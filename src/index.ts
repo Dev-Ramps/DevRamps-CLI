@@ -8,6 +8,7 @@
 
 import { program } from 'commander';
 import { bootstrapCommand } from './commands/bootstrap.js';
+import { loginCommand } from './commands/login.js';
 import { initAgentCommand } from './commands/init-agent.js';
 
 program
@@ -43,6 +44,15 @@ program
     'Comma-separated AWS account IDs to add to role trust policies (for local dev testing)'
   )
   .action(bootstrapCommand);
+
+program
+  .command('login')
+  .description('Authenticate with DevRamps and store credentials for future use')
+  .option(
+    '--endpoint-override <url>',
+    'Override the DevRamps API endpoint (for testing)'
+  )
+  .action(loginCommand);
 
 program
   .command('init-agent')

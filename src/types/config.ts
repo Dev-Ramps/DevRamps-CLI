@@ -18,6 +18,7 @@ export interface AuthData {
   cicdRegion: string;
   accessToken: string;
   apiBaseUrl: string;
+  expiresIn: number; // seconds until token expiry
 }
 
 /**
