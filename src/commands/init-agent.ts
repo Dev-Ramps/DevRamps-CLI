@@ -313,9 +313,11 @@ Always offer to check on the pipeline after the user deploys. Link them to: http
 
 ## Documentation
 
-- [DevRamps Docs](https://devramps.com/docs)
-- [Pipeline YAML Reference](https://devramps.com/docs/reference/pipeline-yaml)
-- [Step Types](https://devramps.com/docs/steps)
+If you need to look up DevRamps features, configuration options, step types, or any other details, fetch the docs directory at:
+
+https://devramps.com/docs/directory.md
+
+This is a markdown index of all available doc pages with summaries and links. Each linked page is also available as markdown. Use this to crawl the docs when you need specific information (e.g., step parameters, pipeline YAML fields, build host dependencies).
 `;
 
 function buildMcpConfig(): Record<string, unknown> {
