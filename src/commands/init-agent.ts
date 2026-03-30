@@ -102,7 +102,7 @@ Every artifact MUST include:
 
 - **\`host_size: "medium"\`** — always use medium as default
 - **\`rebuild_when_changed\`** — list of repo-root-relative paths that trigger rebuilds (e.g., \`[/services/backend]\`)
-- **\`dependencies\`** — list any non-system dependencies the build needs. Use \`["node.20"]\`, \`["node.22"]\`, \`["node.24"]\`, etc. for Node.js builds. If the build uses \`npm\`, \`yarn\`, or \`pnpm\`, you MUST include a node dependency.
+- **\`dependencies\`** — list any non-system dependencies the build needs. Use \`["node.20"]\`, \`["node.22"]\`, \`["node.24"]\`, etc. for Node.js builds. If the build uses \`npm\`, \`yarn\`, or \`pnpm\`, you MUST include a node dependency. See the full list of pre-installed tools and available dependencies at https://devramps.com/docs/reference/build-host-dependencies
 
 ### Bundle artifacts must output a ZIP
 
