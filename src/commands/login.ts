@@ -32,6 +32,8 @@ export async function loginCommand(options: LoginOptions) {
     logger.newline();
     logger.info('You can now use DevRamps CLI commands without re-authenticating.');
     logger.info(`Run ${chalk.cyan('npx @devramps/cli login')} again to switch organizations or refresh credentials.`);
+
+    process.exit(0);
   } catch (error) {
     if (error instanceof DevRampsError) {
       logger.error(error.message);
