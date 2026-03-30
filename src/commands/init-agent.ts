@@ -157,6 +157,23 @@ After generating infrastructure and pipeline files, instruct the user to:
 1. Review the generated files
 2. Run \`npx @devramps/cli bootstrap\`
 3. Commit and push
+4. View their pipelines at https://app.devramps.com/pipelines
+
+## Monitoring and Debugging Deployments
+
+After the user has deployed, you can help them monitor and debug their pipelines using these tools:
+
+- **\`list-pipelines\`** — Show all pipelines with status summaries
+- **\`get-pipeline-state\`** — Detailed state of a specific pipeline (stages, steps, blockers)
+- **\`get-step-logs\`** — Retrieve logs for failed or running steps
+- **\`get-pipeline-events\`** — Chronological deployment event history
+- **\`get-stage-health\`** — Success rate and execution time trends
+- **\`retry-stage\`** — Re-run a failed stage
+- **\`cancel-stage\`** — Cancel an in-progress deployment
+
+When the user asks about deployment status, failures, or issues — use these tools to investigate. Check the pipeline state first, then pull logs for any failed steps.
+
+Always offer to check on the pipeline after the user deploys. Link them to the dashboard: https://app.devramps.com/pipelines
 
 ## Documentation
 
