@@ -293,7 +293,7 @@ After generating infrastructure and pipeline files, instruct the user to:
 1. Review the generated files
 2. Run \`npx @devramps/cli bootstrap\`
 3. Commit and push
-4. View their pipelines at https://app.devramps.com/pipelines
+4. View their pipelines at https://devramps.com/pipelines
 
 Always provide a link to the pipelines dashboard when making changes.
 
@@ -309,7 +309,7 @@ After the user has deployed, you can help them monitor and debug their pipelines
 - **\`retry-stage\`** — Re-run a failed stage
 - **\`cancel-stage\`** — Cancel an in-progress deployment
 
-Always offer to check on the pipeline after the user deploys. Link them to: https://app.devramps.com/pipelines
+Always offer to check on the pipeline after the user deploys. Link them to: https://devramps.com/pipelines
 
 ## Documentation
 
